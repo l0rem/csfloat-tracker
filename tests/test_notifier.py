@@ -49,6 +49,8 @@ class TelegramNotifierTests(unittest.TestCase):
             listing_url="https://csfloat.com/item/123",
             market_hash_name="Item Name",
             float_value=0.123456789,
+            seller_description="double wave thumb",
+            inspect_link="steam://rungame/730/76561202255233023/+csgo_econ_action_preview%200018AA...",
             deltas=[
                 FieldDelta(field_name="price", old_value="n/a", new_value="150"),
                 FieldDelta(field_name="float_value", old_value="n/a", new_value="0.123456789"),
@@ -58,6 +60,10 @@ class TelegramNotifierTests(unittest.TestCase):
 
         self.assertIn("EUR(150)", message)
         self.assertIn("🧪 <b>Float:</b>", message)
+        self.assertIn("📝 <b>Seller Note:</b>", message)
+        self.assertIn("double wave thumb", message)
+        self.assertIn("🔎 <b>Inspect Link</b>", message)
+        self.assertIn("<pre><code>", message)
         self.assertNotIn("n/a", message.lower())
 
     def test_delisted_message_includes_float(self) -> None:

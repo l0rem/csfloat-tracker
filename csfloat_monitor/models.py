@@ -63,6 +63,8 @@ class CurrentListing(BaseModel):
     created_at = TextField(null=True)
     screenshot_url = TextField(null=True)
     image_url = TextField(null=True)
+    inspect_link = TextField(null=True)
+    seller_description = TextField(null=True)
     raw_json = TextField()
     last_seen_at = DateTimeField(default=utc_now)
 

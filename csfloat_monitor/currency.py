@@ -43,6 +43,7 @@ class CSFloatCurrencyPriceFormatter:
         max_retries: int = 3,
         backoff_seconds: float = 1.0,
         cache_ttl_seconds: int = 300,
+        proxy: str | None = None,
         client: httpx.Client | None = None,
     ):
         self._api_key = api_key
@@ -51,7 +52,7 @@ class CSFloatCurrencyPriceFormatter:
         self._max_retries = max(1, int(max_retries))
         self._backoff_seconds = max(0.1, float(backoff_seconds))
         self._cache_ttl_seconds = max(10, int(cache_ttl_seconds))
-        self._client = client or httpx.Client(timeout=timeout_seconds)
+        self._client = client or httpx.Client(timeout=timeout_seconds, proxy=proxy)
         self._owns_client = client is None
         self._cached_rate: float | None = None
         self._cached_at_monotonic: float | None = None

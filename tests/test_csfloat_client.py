@@ -32,7 +32,9 @@ class CSFloatClientTests(unittest.TestCase):
                     "item": {
                         "market_hash_name": "B",
                         "cs2_screenshot_id": "8437643956702555280",
+                        "inspect_link": "steam://inspect/B",
                     },
+                    "description": "double wave thumb",
                 },
             ],
         }
@@ -51,6 +53,8 @@ class CSFloatClientTests(unittest.TestCase):
             records["2"].screenshot_url,
         )
         self.assertEqual(records["2"].screenshot_url, records["2"].image_url)
+        self.assertEqual("steam://inspect/B", records["2"].inspect_link)
+        self.assertEqual("double wave thumb", records["2"].seller_description)
         client.close()
 
     def test_retries_429_and_recovers(self) -> None:

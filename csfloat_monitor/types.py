@@ -21,6 +21,8 @@ class ListingRecord:
     raw_json: str
     screenshot_url: str | None = None
     image_url: str | None = None
+    inspect_link: str | None = None
+    seller_description: str | None = None
 
 
 @dataclass(slots=True)
@@ -37,6 +39,8 @@ class ChangeSet:
     listing_url: str | None
     market_hash_name: str | None
     float_value: float | None = None
+    seller_description: str | None = None
     deltas: list[FieldDelta] = field(default_factory=list)
     screenshot_url: str | None = None
     image_url: str | None = None
+    inspect_link: str | None = None

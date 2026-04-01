@@ -30,6 +30,7 @@ class CSFloatClient:
         backoff_seconds: float = 1.0,
         max_backoff_seconds: float = 90.0,
         page_delay_seconds: float = 0.35,
+        proxy: str | None = None,
         client: httpx.Client | None = None,
     ):
         self._api_key = api_key
@@ -41,7 +42,7 @@ class CSFloatClient:
         self._backoff_seconds = max(0.1, backoff_seconds)
         self._max_backoff_seconds = max(self._backoff_seconds, max_backoff_seconds)
         self._page_delay_seconds = max(0.0, page_delay_seconds)
-        self._client = client or httpx.Client(timeout=timeout_seconds)
+        self._client = client or httpx.Client(timeout=timeout_seconds, proxy=proxy)
         self._owns_client = client is None
         self._log = logging.getLogger("csfloat.client")
 
@@ -186,6 +187,7 @@ class CSFloatClient:
         raw_json = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         screenshot_url = self._screenshot_url(item)
         icon_image_url = self._icon_image_url(item)
+        inspect_link = self._inspect_link(item)
 
         return ListingRecord(
             listing_id=listing_id,
@@ -200,6 +202,8 @@ class CSFloatClient:
             raw_json=raw_json,
             screenshot_url=screenshot_url,
             image_url=screenshot_url or icon_image_url,
+            inspect_link=inspect_link,
+            seller_description=self._seller_description(payload),
         )
 
     def _screenshot_url(self, item: dict[str, Any]) -> str | None:
@@ -217,6 +221,20 @@ class CSFloatClient:
         if icon_value.startswith("http://") or icon_value.startswith("https://"):
             return icon_value
         return f"{STEAM_ICON_URL_PREFIX}{icon_value}"
+
+    @staticmethod
+    def _inspect_link(item: dict[str, Any]) -> str | None:
+        inspect_link = item.get("inspect_link") or item.get("serialized_inspect")
+        if inspect_link in {None, ""}:
+            return None
+        return str(inspect_link)
+
+    @staticmethod
+    def _seller_description(payload: dict[str, Any]) -> str | None:
+        description = payload.get("description")
+        if description in {None, ""}:
+            return None
+        return str(description)
 
     @staticmethod
     def _with_cursor(url: str, cursor: str | None) -> str:

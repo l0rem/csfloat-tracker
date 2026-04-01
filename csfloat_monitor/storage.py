@@ -50,6 +50,8 @@ class Storage:
                 created_at=row.created_at,
                 screenshot_url=row.screenshot_url,
                 image_url=row.image_url or row.screenshot_url or _infer_image_url_from_raw_json(row.raw_json),
+                inspect_link=row.inspect_link or _infer_inspect_link_from_raw_json(row.raw_json),
+                seller_description=row.seller_description or _infer_seller_description_from_raw_json(row.raw_json),
                 raw_json=row.raw_json,
             )
         return result
@@ -104,6 +106,8 @@ class Storage:
                     "created_at": listing.created_at,
                     "screenshot_url": listing.screenshot_url,
                     "image_url": listing.image_url or listing.screenshot_url,
+                    "inspect_link": listing.inspect_link,
+                    "seller_description": listing.seller_description,
                     "raw_json": listing.raw_json,
                     "last_seen_at": now,
                 }
@@ -172,3 +176,31 @@ def _infer_image_url_from_raw_json(raw_json: str | None) -> str | None:
     if icon_value.startswith("http://") or icon_value.startswith("https://"):
         return icon_value
     return f"https://steamcommunity-a.akamaihd.net/economy/image/{icon_value}"
+
+
+def _infer_inspect_link_from_raw_json(raw_json: str | None) -> str | None:
+    if not raw_json:
+        return None
+    try:
+        payload = json.loads(raw_json)
+    except Exception:  # noqa: BLE001
+        return None
+
+    item = payload.get("item") or {}
+    inspect_link = item.get("inspect_link") or item.get("serialized_inspect")
+    if inspect_link in {None, ""}:
+        return None
+    return str(inspect_link)
+
+
+def _infer_seller_description_from_raw_json(raw_json: str | None) -> str | None:
+    if not raw_json:
+        return None
+    try:
+        payload = json.loads(raw_json)
+    except Exception:  # noqa: BLE001
+        return None
+    description = payload.get("description")
+    if description in {None, ""}:
+        return None
+    return str(description)

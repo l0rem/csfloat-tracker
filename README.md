@@ -4,6 +4,8 @@ Local Python monitor for CSFloat listings with:
 - PostgreSQL snapshot + append-only item change history
 - Telegram notifications for new listings, price changes, and delists
 - Photo-first Telegram alerts (in-game screenshot when available, icon fallback)
+- New listing alerts include an inspect link block when available
+- New listing alerts include seller description when present
 - Auto schema migrations on startup via `peewee-db-evolve`
 
 ## Requirements
@@ -77,6 +79,7 @@ Use the provided `Dockerfile` and set these environment variables:
 - `CSFLOAT_LISTINGS_URL`
 - `ITEM_URL_TEMPLATE`
 - `SCREENSHOT_URL_TEMPLATE`
+- `CSFLOAT_PROXY` (optional; `host:port:user:pass` or full proxy URL)
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 - `DATABASE_URL` (Supabase, include `?sslmode=require`)

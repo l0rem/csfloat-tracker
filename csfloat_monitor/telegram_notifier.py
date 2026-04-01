@@ -47,6 +47,9 @@ def format_change_message(change: ChangeSet, price_formatter: PriceFormatter = D
         price = _find_delta_value(change, "price", use_new=True)
         if price:
             lines.append(f"💶 <b>Price:</b> <code>{html.escape(_format_value('price', price, price_formatter))}</code>")
+        if change.seller_description:
+            lines.append(f"📝 <b>Seller Note:</b> {html.escape(change.seller_description)}")
+        _append_inspect_link(lines, change)
         return "\n".join(lines)
 
     if change.change_type == CHANGE_PRICE_CHANGED:
@@ -84,6 +87,14 @@ def _find_delta_value(change: ChangeSet, field_name: str, use_new: bool) -> str 
             return None
         return value
     return None
+
+
+def _append_inspect_link(lines: list[str], change: ChangeSet) -> None:
+    if not change.inspect_link:
+        return
+    lines.append("")
+    lines.append("🔎 <b>Inspect Link</b>")
+    lines.append(f"<pre><code>{html.escape(change.inspect_link)}</code></pre>")
 
 
 def build_send_payload(

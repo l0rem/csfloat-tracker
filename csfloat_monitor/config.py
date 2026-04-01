@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
+from csfloat_monitor.proxy import normalize_proxy_url, redact_proxy_url
 
 DEFAULT_LISTINGS_URL = "https://csfloat.com/api/v1/listings?limit=40&max_price=46364&paint_index=1437"
 DEFAULT_ITEM_URL_TEMPLATE = "https://csfloat.com/item/{listing_id}"
@@ -18,6 +19,7 @@ class AppConfig:
     csfloat_listings_url: str
     item_url_template: str
     screenshot_url_template: str
+    csfloat_proxy: str | None
     telegram_bot_token: str
     telegram_chat_id: str | None
     database_url: str
@@ -81,6 +83,8 @@ class AppConfig:
         if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
             raise ValueError("LOG_LEVEL must be one of DEBUG, INFO, WARNING, ERROR, CRITICAL")
 
+        csfloat_proxy = normalize_proxy_url(os.getenv("CSFLOAT_PROXY", "").strip())
+
         return cls(
             csfloat_api_key=csfloat_api_key,
             csfloat_listings_url=os.getenv("CSFLOAT_LISTINGS_URL", DEFAULT_LISTINGS_URL).strip(),
@@ -89,6 +93,7 @@ class AppConfig:
                 "SCREENSHOT_URL_TEMPLATE",
                 DEFAULT_SCREENSHOT_URL_TEMPLATE,
             ).strip(),
+            csfloat_proxy=csfloat_proxy,
             telegram_bot_token=telegram_bot_token,
             telegram_chat_id=os.getenv("TELEGRAM_CHAT_ID", "").strip() or None,
             database_url=(
@@ -116,3 +121,6 @@ class AppConfig:
             db_name = parsed.path.lstrip("/") or "unknown-db"
             return f"postgres://{host}:{port}/{db_name}"
         return target
+
+    def redacted_proxy_target(self) -> str | None:
+        return redact_proxy_url(self.csfloat_proxy)

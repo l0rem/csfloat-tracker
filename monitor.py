@@ -104,10 +104,11 @@ def cmd_resolve_chat_id(args: argparse.Namespace) -> int:
 def cmd_run(_: argparse.Namespace) -> int:
     config = AppConfig.from_env()
     LOGGER.info(
-        "startup_config db=%s listings_url=%s poll_interval=%ss http_max_retries=%d http_429_retries=%d "
+        "startup_config db=%s proxy=%s listings_url=%s poll_interval=%ss http_max_retries=%d http_429_retries=%d "
         "http_backoff=%.2fs "
         "http_max_backoff=%.2fs http_page_delay=%.2fs display_currency=%s",
         config.redacted_database_target(),
+        config.redacted_proxy_target(),
         config.csfloat_listings_url,
         config.poll_interval_seconds,
         config.http_max_retries,
@@ -138,6 +139,7 @@ def cmd_run(_: argparse.Namespace) -> int:
         backoff_seconds=config.http_backoff_seconds,
         max_backoff_seconds=config.http_max_backoff_seconds,
         page_delay_seconds=config.http_page_delay_seconds,
+        proxy=config.csfloat_proxy,
     )
     price_formatter = CSFloatCurrencyPriceFormatter(
         api_key=config.csfloat_api_key,
@@ -146,6 +148,7 @@ def cmd_run(_: argparse.Namespace) -> int:
         max_retries=config.http_max_retries,
         backoff_seconds=config.http_backoff_seconds,
         cache_ttl_seconds=config.exchange_rate_cache_ttl_seconds,
+        proxy=config.csfloat_proxy,
     )
     notifier = TelegramNotifier(
         bot_token=config.telegram_bot_token,

@@ -44,9 +44,11 @@ def diff_listings(
                 listing_url=listing.listing_url,
                 market_hash_name=listing.market_hash_name,
                 float_value=listing.float_value,
+                seller_description=listing.seller_description,
                 deltas=deltas,
                 screenshot_url=listing.screenshot_url,
                 image_url=listing.image_url or listing.screenshot_url,
+                inspect_link=listing.inspect_link,
             )
         )
 
@@ -67,9 +69,11 @@ def diff_listings(
                     listing_url=new_listing.listing_url,
                     market_hash_name=new_listing.market_hash_name,
                     float_value=new_listing.float_value,
+                    seller_description=new_listing.seller_description,
                     deltas=deltas,
                     screenshot_url=new_listing.screenshot_url,
                     image_url=new_listing.image_url or new_listing.screenshot_url,
+                    inspect_link=new_listing.inspect_link,
                 )
             )
 
@@ -87,9 +91,11 @@ def diff_listings(
                 listing_url=old_listing.listing_url,
                 market_hash_name=old_listing.market_hash_name,
                 float_value=old_listing.float_value,
+                seller_description=old_listing.seller_description,
                 deltas=deltas,
                 screenshot_url=old_listing.screenshot_url,
                 image_url=old_listing.image_url or old_listing.screenshot_url,
+                inspect_link=old_listing.inspect_link,
             )
         )
 
