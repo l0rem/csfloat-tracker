@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -14,11 +15,16 @@ from csfloat_monitor.storage import Storage
 from csfloat_monitor.telegram_notifier import TelegramNotifier
 
 
+LOGGER = logging.getLogger("csfloat.monitor")
+
+
 def configure_logging() -> None:
     Path("./logs").mkdir(parents=True, exist_ok=True)
+    level_name = os.getenv("LOG_LEVEL", "INFO").upper()
+    level = getattr(logging, level_name, logging.INFO)
     logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(message)s",
+        level=level,
+        format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
         handlers=[
             logging.StreamHandler(sys.stdout),
             logging.FileHandler("./logs/monitor.log"),
@@ -35,16 +41,21 @@ def run_single_poll(
     is_startup: bool,
 ) -> int:
     poll = storage.start_poll(is_startup=is_startup)
+    LOGGER.info("poll_start poll_id=%s startup=%s", poll.id, is_startup)
     try:
         previous = storage.get_snapshot()
+        LOGGER.info("poll_snapshot_loaded poll_id=%s previous_count=%d", poll.id, len(previous))
         current = csfloat_client.fetch_all_listings()
+        LOGGER.info("poll_fetch_complete poll_id=%s fetched_count=%d", poll.id, len(current))
         if is_startup and not previous:
             changes = []
         else:
             changes = diff_listings(previous, current)
+        LOGGER.info("poll_diff_complete poll_id=%s changes=%d", poll.id, len(changes))
         storage.apply_poll_results(poll, current, changes)
     except Exception as exc:  # noqa: BLE001
         storage.mark_poll_failed(poll, str(exc))
+        LOGGER.exception("poll_failed poll_id=%s startup=%s error=%s", poll.id, is_startup, exc)
         raise
 
     sent_count = 0
@@ -53,10 +64,17 @@ def run_single_poll(
             notifier.send_change(change)
             sent_count += 1
         except Exception as exc:  # noqa: BLE001
-            logging.exception("Failed to send Telegram notification for listing %s: %s", change.listing_id, exc)
+            LOGGER.exception(
+                "notify_failed poll_id=%s listing_id=%s change_type=%s error=%s",
+                poll.id,
+                change.listing_id,
+                change.change_type,
+                exc,
+            )
 
-    logging.info(
-        "poll_complete startup=%s fetched=%d changes=%d notifications_sent=%d",
+    LOGGER.info(
+        "poll_complete poll_id=%s startup=%s fetched=%d changes=%d notifications_sent=%d",
+        poll.id,
         is_startup,
         len(current),
         len(changes),
@@ -67,6 +85,7 @@ def run_single_poll(
 
 def cmd_resolve_chat_id(args: argparse.Namespace) -> int:
     config = AppConfig.from_env()
+    LOGGER.info("resolve_chat_id_start username=%s db=%s", args.username, config.redacted_database_target())
     storage = Storage(config.database_url)
     storage.run_migrations()
 
@@ -84,6 +103,18 @@ def cmd_resolve_chat_id(args: argparse.Namespace) -> int:
 
 def cmd_run(_: argparse.Namespace) -> int:
     config = AppConfig.from_env()
+    LOGGER.info(
+        "startup_config db=%s listings_url=%s poll_interval=%ss http_max_retries=%d http_backoff=%.2fs "
+        "http_max_backoff=%.2fs http_page_delay=%.2fs display_currency=%s",
+        config.redacted_database_target(),
+        config.csfloat_listings_url,
+        config.poll_interval_seconds,
+        config.http_max_retries,
+        config.http_backoff_seconds,
+        config.http_max_backoff_seconds,
+        config.http_page_delay_seconds,
+        config.display_currency,
+    )
     storage = Storage(config.database_url)
     storage.run_migrations()
 
@@ -102,6 +133,8 @@ def cmd_run(_: argparse.Namespace) -> int:
         timeout_seconds=config.http_timeout_seconds,
         max_retries=config.http_max_retries,
         backoff_seconds=config.http_backoff_seconds,
+        max_backoff_seconds=config.http_max_backoff_seconds,
+        page_delay_seconds=config.http_page_delay_seconds,
     )
     price_formatter = CSFloatCurrencyPriceFormatter(
         api_key=config.csfloat_api_key,
@@ -122,14 +155,14 @@ def cmd_run(_: argparse.Namespace) -> int:
         try:
             run_single_poll(storage, csfloat_client, notifier, is_startup=True)
         except Exception as exc:  # noqa: BLE001
-            logging.exception("Startup poll failed: %s", exc)
+            LOGGER.exception("startup_poll_failed error=%s", exc)
 
         while True:
             time.sleep(config.poll_interval_seconds)
             try:
                 run_single_poll(storage, csfloat_client, notifier, is_startup=False)
             except Exception as exc:  # noqa: BLE001
-                logging.exception("Poll failed: %s", exc)
+                LOGGER.exception("poll_loop_failed error=%s", exc)
     finally:
         csfloat_client.close()
         notifier.close()
@@ -159,10 +192,10 @@ def main() -> int:
         configure_logging()
         return int(args.func(args) or 0)
     except KeyboardInterrupt:
-        logging.info("Stopped by user")
+        LOGGER.info("stopped_by_user")
         return 0
     except Exception as exc:  # noqa: BLE001
-        logging.exception("Fatal error: %s", exc)
+        LOGGER.exception("fatal_error error=%s", exc)
         return 1
 
 

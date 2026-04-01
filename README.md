@@ -41,6 +41,7 @@ The script will:
 3. Poll every 30 seconds (or `POLL_INTERVAL_SECONDS`).
 4. Persist append-only row-level change history in `item_changes`.
 5. Send immediate Telegram messages with changed fields and old/new values.
+6. Emit detailed lifecycle logs to stdout and `./logs/monitor.log` for deploy debugging.
 
 ## Tests
 
@@ -79,9 +80,26 @@ Use the provided `Dockerfile` and set these environment variables:
 - `TELEGRAM_BOT_TOKEN`
 - `TELEGRAM_CHAT_ID`
 - `DATABASE_URL` (Supabase, include `?sslmode=require`)
+- `LOG_LEVEL` (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`)
 - `POLL_INTERVAL_SECONDS`
 - `HTTP_TIMEOUT_SECONDS`
 - `HTTP_MAX_RETRIES`
 - `HTTP_BACKOFF_SECONDS`
+- `HTTP_MAX_BACKOFF_SECONDS`
+- `HTTP_PAGE_DELAY_SECONDS`
 - `DISPLAY_CURRENCY`
 - `EXCHANGE_RATE_CACHE_TTL_SECONDS`
+
+For 429-heavy environments (containers/VPS), increase resilience:
+- `HTTP_MAX_RETRIES=8`
+- `HTTP_BACKOFF_SECONDS=1.5`
+- `HTTP_MAX_BACKOFF_SECONDS=90`
+- `HTTP_PAGE_DELAY_SECONDS=0.35`
+
+Key log events to watch after deploy:
+- `startup_config` (effective runtime config without secrets)
+- `migrations_start` / `migrations_complete`
+- `poll_start` / `poll_fetch_complete` / `poll_diff_complete` / `poll_complete`
+- `fetch_transient_error` (429/5xx retries with delay)
+- `notify_photo_sent` or `notify_text_sent`
+- `poll_failed` / `startup_poll_failed` / `fatal_error`

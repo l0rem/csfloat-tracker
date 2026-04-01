@@ -153,6 +153,7 @@ class TelegramNotifier:
         self._updates_url = f"https://api.telegram.org/bot{bot_token}/getUpdates"
         self._client = httpx.Client(timeout=timeout_seconds)
         self._price_formatter = price_formatter
+        self._log = logging.getLogger("csfloat.notifier")
 
     def close(self) -> None:
         self._client.close()
@@ -165,17 +166,28 @@ class TelegramNotifier:
                 response = self._client.post(self._send_photo_url, json=photo_payload)
                 response.raise_for_status()
                 self._assert_telegram_ok(response.json())
+                self._log.info(
+                    "notify_photo_sent listing_id=%s change_type=%s",
+                    change.listing_id,
+                    change.change_type,
+                )
                 return
             except Exception:  # noqa: BLE001
-                logging.warning(
-                    "sendPhoto failed for listing %s, falling back to sendMessage",
+                self._log.warning(
+                    "notify_photo_failed_fallback_text listing_id=%s change_type=%s",
                     change.listing_id,
+                    change.change_type,
                 )
 
         payload = build_send_payload(self._chat_id, change, price_formatter=self._price_formatter)
         response = self._client.post(self._send_message_url, json=payload)
         response.raise_for_status()
         self._assert_telegram_ok(response.json())
+        self._log.info(
+            "notify_text_sent listing_id=%s change_type=%s",
+            change.listing_id,
+            change.change_type,
+        )
 
     @staticmethod
     def _assert_telegram_ok(data: dict[str, Any]) -> None:

@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 import json
+import logging
+import random
 import time
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -23,6 +27,9 @@ class CSFloatClient:
         timeout_seconds: float = 15,
         max_retries: int = 3,
         backoff_seconds: float = 1.0,
+        max_backoff_seconds: float = 90.0,
+        page_delay_seconds: float = 0.35,
+        client: httpx.Client | None = None,
     ):
         self._api_key = api_key
         self._listings_url = listings_url
@@ -30,17 +37,34 @@ class CSFloatClient:
         self._screenshot_url_template = screenshot_url_template
         self._max_retries = max(1, max_retries)
         self._backoff_seconds = max(0.1, backoff_seconds)
-        self._client = httpx.Client(timeout=timeout_seconds)
+        self._max_backoff_seconds = max(self._backoff_seconds, max_backoff_seconds)
+        self._page_delay_seconds = max(0.0, page_delay_seconds)
+        self._client = client or httpx.Client(timeout=timeout_seconds)
+        self._owns_client = client is None
+        self._log = logging.getLogger("csfloat.client")
 
     def close(self) -> None:
-        self._client.close()
+        if self._owns_client:
+            self._client.close()
 
     def fetch_all_listings(self) -> dict[str, ListingRecord]:
         records: dict[str, ListingRecord] = {}
         cursor: str | None = None
 
+        is_first_page = True
+        page_number = 1
         while True:
+            if not is_first_page and self._page_delay_seconds > 0:
+                time.sleep(self._page_delay_seconds)
             payload = self._request_page(cursor)
+            page_data = payload.get("data", [])
+            self._log.info(
+                "fetch_page_success page=%d cursor=%s items=%d has_next=%s",
+                page_number,
+                bool(cursor),
+                len(page_data),
+                bool(payload.get("cursor")),
+            )
             for listing_payload in payload.get("data", []):
                 record = self._normalize_listing(listing_payload)
                 records[record.listing_id] = record
@@ -48,6 +72,8 @@ class CSFloatClient:
             cursor = payload.get("cursor")
             if not cursor:
                 break
+            is_first_page = False
+            page_number += 1
 
         return records
 
@@ -62,20 +88,73 @@ class CSFloatClient:
                     headers={"Authorization": self._api_key},
                 )
                 if response.status_code in {429, 500, 502, 503, 504}:
-                    raise httpx.HTTPStatusError(
+                    status_exc = httpx.HTTPStatusError(
                         f"Transient HTTP status: {response.status_code}",
                         request=response.request,
                         response=response,
                     )
+                    last_exc = status_exc
+                    if attempt == self._max_retries:
+                        break
+                    delay = self._compute_retry_delay(attempt, response)
+                    self._log.warning(
+                        "fetch_transient_error status=%d attempt=%d/%d retry_in=%.2fs",
+                        response.status_code,
+                        attempt,
+                        self._max_retries,
+                        delay,
+                    )
+                    time.sleep(delay)
+                    continue
                 response.raise_for_status()
                 return response.json()
             except (httpx.TimeoutException, httpx.NetworkError, httpx.HTTPStatusError) as exc:
                 last_exc = exc
                 if attempt == self._max_retries:
                     break
-                time.sleep(self._backoff_seconds * (2 ** (attempt - 1)))
+                delay = self._compute_retry_delay(attempt, None)
+                self._log.warning(
+                    "fetch_retryable_exception attempt=%d/%d retry_in=%.2fs error=%s",
+                    attempt,
+                    self._max_retries,
+                    delay,
+                    exc,
+                )
+                time.sleep(delay)
 
-        raise RuntimeError(f"Failed to fetch CSFloat listings: {last_exc}")
+        raise RuntimeError(f"Failed to fetch CSFloat listings after {self._max_retries} attempts: {last_exc}")
+
+    def _compute_retry_delay(self, attempt: int, response: httpx.Response | None) -> float:
+        # Honor Retry-After for explicit server-side throttling.
+        if response is not None and response.status_code == 429:
+            retry_after = self._parse_retry_after_seconds(response.headers.get("Retry-After"))
+            if retry_after is not None:
+                return min(max(retry_after, self._backoff_seconds), self._max_backoff_seconds)
+
+        base = self._backoff_seconds * (2 ** (attempt - 1))
+        jitter = random.uniform(0, self._backoff_seconds * 0.25)
+        return min(base + jitter, self._max_backoff_seconds)
+
+    @staticmethod
+    def _parse_retry_after_seconds(raw: str | None) -> float | None:
+        if not raw:
+            return None
+        value = raw.strip()
+        try:
+            return float(value)
+        except ValueError:
+            pass
+
+        try:
+            retry_dt = parsedate_to_datetime(value)
+        except (TypeError, ValueError):
+            return None
+
+        if retry_dt.tzinfo is None:
+            retry_dt = retry_dt.replace(tzinfo=UTC)
+        now = datetime.now(UTC)
+        delta = (retry_dt - now).total_seconds()
+        return max(0.0, delta)
 
     def _normalize_listing(self, payload: dict[str, Any]) -> ListingRecord:
         listing_id = str(payload.get("id", "")).strip()

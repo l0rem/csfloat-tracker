@@ -3,6 +3,8 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
+import httpx
+
 from csfloat_monitor.csfloat_client import CSFloatClient
 
 
@@ -49,4 +51,31 @@ class CSFloatClientTests(unittest.TestCase):
             records["2"].screenshot_url,
         )
         self.assertEqual(records["2"].screenshot_url, records["2"].image_url)
+        client.close()
+
+    def test_retries_429_and_recovers(self) -> None:
+        calls = {"count": 0}
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            calls["count"] += 1
+            if calls["count"] == 1:
+                return httpx.Response(429, headers={"Retry-After": "0"}, json={"error": "rate_limited"})
+            return httpx.Response(200, json={"data": []})
+
+        client = CSFloatClient(
+            api_key="test",
+            listings_url="https://csfloat.com/api/v1/listings?limit=1&paint_index=1437",
+            item_url_template="https://csfloat.com/item/{listing_id}",
+            screenshot_url_template="https://csfloat.pics/m/{screenshot_id}/playside.png?v=3",
+            max_retries=3,
+            backoff_seconds=0.1,
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+
+        with patch("csfloat_monitor.csfloat_client.time.sleep") as sleep_mock:
+            records = client.fetch_all_listings()
+
+        self.assertEqual({}, records)
+        self.assertEqual(2, calls["count"])
+        self.assertTrue(sleep_mock.called)
         client.close()

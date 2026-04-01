@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterable
 from datetime import UTC, datetime
 
@@ -26,9 +27,12 @@ class Storage:
 
     def __init__(self, database_url_or_path: str):
         self._db = initialize_database(database_url_or_path)
+        self._log = logging.getLogger("csfloat.storage")
 
     def run_migrations(self) -> None:
+        self._log.info("migrations_start")
         run_unattended_migrations()
+        self._log.info("migrations_complete")
 
     def get_snapshot(self) -> dict[str, ListingRecord]:
         result: dict[str, ListingRecord] = {}
@@ -116,6 +120,14 @@ class Storage:
             poll.delisted_count = sum(1 for c in changes_list if c.change_type == CHANGE_DELISTED)
             poll.error_message = None
             poll.save()
+            self._log.info(
+                "poll_persisted poll_id=%s fetched=%d new=%d price_changed=%d delisted=%d",
+                poll.id,
+                len(current),
+                poll.new_count,
+                poll.price_changed_count,
+                poll.delisted_count,
+            )
 
     def get_setting(self, key: str) -> str | None:
         setting = Setting.get_or_none(Setting.key == key)
