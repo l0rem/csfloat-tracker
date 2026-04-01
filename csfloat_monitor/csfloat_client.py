@@ -26,6 +26,7 @@ class CSFloatClient:
         screenshot_url_template: str,
         timeout_seconds: float = 15,
         max_retries: int = 3,
+        max_429_retries: int = 1,
         backoff_seconds: float = 1.0,
         max_backoff_seconds: float = 90.0,
         page_delay_seconds: float = 0.35,
@@ -36,6 +37,7 @@ class CSFloatClient:
         self._item_url_template = item_url_template
         self._screenshot_url_template = screenshot_url_template
         self._max_retries = max(1, max_retries)
+        self._max_429_retries = max(0, max_429_retries)
         self._backoff_seconds = max(0.1, backoff_seconds)
         self._max_backoff_seconds = max(self._backoff_seconds, max_backoff_seconds)
         self._page_delay_seconds = max(0.0, page_delay_seconds)
@@ -81,6 +83,7 @@ class CSFloatClient:
         url = self._with_cursor(self._listings_url, cursor)
 
         last_exc: Exception | None = None
+        retry_429_used = 0
         for attempt in range(1, self._max_retries + 1):
             try:
                 response = self._client.get(
@@ -96,6 +99,16 @@ class CSFloatClient:
                     last_exc = status_exc
                     if attempt == self._max_retries:
                         break
+                    if response.status_code == 429 and retry_429_used >= self._max_429_retries:
+                        self._log.warning(
+                            "fetch_429_budget_exhausted attempt=%d/%d retry_429_used=%d",
+                            attempt,
+                            self._max_retries,
+                            retry_429_used,
+                        )
+                        break
+                    if response.status_code == 429:
+                        retry_429_used += 1
                     delay = self._compute_retry_delay(attempt, response)
                     self._log.warning(
                         "fetch_transient_error status=%d attempt=%d/%d retry_in=%.2fs",
@@ -122,7 +135,10 @@ class CSFloatClient:
                 )
                 time.sleep(delay)
 
-        raise RuntimeError(f"Failed to fetch CSFloat listings after {self._max_retries} attempts: {last_exc}")
+        raise RuntimeError(
+            f"Failed to fetch CSFloat listings after {self._max_retries} attempts "
+            f"(429 retries used: {retry_429_used}/{self._max_429_retries}): {last_exc}"
+        )
 
     def _compute_retry_delay(self, attempt: int, response: httpx.Response | None) -> float:
         # Honor Retry-After for explicit server-side throttling.
@@ -130,6 +146,10 @@ class CSFloatClient:
             retry_after = self._parse_retry_after_seconds(response.headers.get("Retry-After"))
             if retry_after is not None:
                 return min(max(retry_after, self._backoff_seconds), self._max_backoff_seconds)
+            # Without Retry-After, be conservative to avoid burst retries.
+            base_429 = max(10.0, self._backoff_seconds * (2 ** (attempt - 1)))
+            jitter_429 = random.uniform(0, 2.0)
+            return min(base_429 + jitter_429, self._max_backoff_seconds)
 
         base = self._backoff_seconds * (2 ** (attempt - 1))
         jitter = random.uniform(0, self._backoff_seconds * 0.25)

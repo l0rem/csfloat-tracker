@@ -24,6 +24,7 @@ class AppConfig:
     poll_interval_seconds: int
     http_timeout_seconds: float
     http_max_retries: int
+    http_429_retries: int
     http_backoff_seconds: float
     http_max_backoff_seconds: float
     http_page_delay_seconds: float
@@ -51,6 +52,10 @@ class AppConfig:
         http_max_retries = int(os.getenv("HTTP_MAX_RETRIES", "8"))
         if http_max_retries < 1:
             raise ValueError("HTTP_MAX_RETRIES must be >= 1")
+
+        http_429_retries = int(os.getenv("HTTP_429_RETRIES", "1"))
+        if http_429_retries < 0:
+            raise ValueError("HTTP_429_RETRIES must be >= 0")
 
         http_backoff_seconds = float(os.getenv("HTTP_BACKOFF_SECONDS", "1.5"))
         if http_backoff_seconds < 0:
@@ -93,6 +98,7 @@ class AppConfig:
             poll_interval_seconds=poll_interval_seconds,
             http_timeout_seconds=float(os.getenv("HTTP_TIMEOUT_SECONDS", "15")),
             http_max_retries=http_max_retries,
+            http_429_retries=http_429_retries,
             http_backoff_seconds=http_backoff_seconds,
             http_max_backoff_seconds=http_max_backoff_seconds,
             http_page_delay_seconds=http_page_delay_seconds,

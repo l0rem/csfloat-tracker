@@ -104,12 +104,14 @@ def cmd_resolve_chat_id(args: argparse.Namespace) -> int:
 def cmd_run(_: argparse.Namespace) -> int:
     config = AppConfig.from_env()
     LOGGER.info(
-        "startup_config db=%s listings_url=%s poll_interval=%ss http_max_retries=%d http_backoff=%.2fs "
+        "startup_config db=%s listings_url=%s poll_interval=%ss http_max_retries=%d http_429_retries=%d "
+        "http_backoff=%.2fs "
         "http_max_backoff=%.2fs http_page_delay=%.2fs display_currency=%s",
         config.redacted_database_target(),
         config.csfloat_listings_url,
         config.poll_interval_seconds,
         config.http_max_retries,
+        config.http_429_retries,
         config.http_backoff_seconds,
         config.http_max_backoff_seconds,
         config.http_page_delay_seconds,
@@ -132,6 +134,7 @@ def cmd_run(_: argparse.Namespace) -> int:
         screenshot_url_template=config.screenshot_url_template,
         timeout_seconds=config.http_timeout_seconds,
         max_retries=config.http_max_retries,
+        max_429_retries=config.http_429_retries,
         backoff_seconds=config.http_backoff_seconds,
         max_backoff_seconds=config.http_max_backoff_seconds,
         page_delay_seconds=config.http_page_delay_seconds,
@@ -155,14 +158,20 @@ def cmd_run(_: argparse.Namespace) -> int:
         try:
             run_single_poll(storage, csfloat_client, notifier, is_startup=True)
         except Exception as exc:  # noqa: BLE001
-            LOGGER.exception("startup_poll_failed error=%s", exc)
+            if _is_rate_limited_error(exc):
+                LOGGER.warning("startup_poll_rate_limited error=%s", exc)
+            else:
+                LOGGER.exception("startup_poll_failed error=%s", exc)
 
         while True:
             time.sleep(config.poll_interval_seconds)
             try:
                 run_single_poll(storage, csfloat_client, notifier, is_startup=False)
             except Exception as exc:  # noqa: BLE001
-                LOGGER.exception("poll_loop_failed error=%s", exc)
+                if _is_rate_limited_error(exc):
+                    LOGGER.warning("poll_loop_rate_limited error=%s", exc)
+                else:
+                    LOGGER.exception("poll_loop_failed error=%s", exc)
     finally:
         csfloat_client.close()
         notifier.close()
@@ -197,6 +206,10 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         LOGGER.exception("fatal_error error=%s", exc)
         return 1
+
+
+def _is_rate_limited_error(exc: Exception) -> bool:
+    return "429" in str(exc) or "rate limit" in str(exc).lower()
 
 
 if __name__ == "__main__":

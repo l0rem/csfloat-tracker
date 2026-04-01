@@ -84,6 +84,7 @@ Use the provided `Dockerfile` and set these environment variables:
 - `POLL_INTERVAL_SECONDS`
 - `HTTP_TIMEOUT_SECONDS`
 - `HTTP_MAX_RETRIES`
+- `HTTP_429_RETRIES`
 - `HTTP_BACKOFF_SECONDS`
 - `HTTP_MAX_BACKOFF_SECONDS`
 - `HTTP_PAGE_DELAY_SECONDS`
@@ -92,6 +93,7 @@ Use the provided `Dockerfile` and set these environment variables:
 
 For 429-heavy environments (containers/VPS), increase resilience:
 - `HTTP_MAX_RETRIES=8`
+- `HTTP_429_RETRIES=1`
 - `HTTP_BACKOFF_SECONDS=1.5`
 - `HTTP_MAX_BACKOFF_SECONDS=90`
 - `HTTP_PAGE_DELAY_SECONDS=0.35`

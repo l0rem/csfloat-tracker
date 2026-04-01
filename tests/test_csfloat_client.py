@@ -68,6 +68,7 @@ class CSFloatClientTests(unittest.TestCase):
             item_url_template="https://csfloat.com/item/{listing_id}",
             screenshot_url_template="https://csfloat.pics/m/{screenshot_id}/playside.png?v=3",
             max_retries=3,
+            max_429_retries=1,
             backoff_seconds=0.1,
             client=httpx.Client(transport=httpx.MockTransport(handler)),
         )
@@ -78,4 +79,29 @@ class CSFloatClientTests(unittest.TestCase):
         self.assertEqual({}, records)
         self.assertEqual(2, calls["count"])
         self.assertTrue(sleep_mock.called)
+        client.close()
+
+    def test_stops_429_retries_after_budget(self) -> None:
+        calls = {"count": 0}
+
+        def handler(_request: httpx.Request) -> httpx.Response:
+            calls["count"] += 1
+            return httpx.Response(429, json={"error": "rate_limited"})
+
+        client = CSFloatClient(
+            api_key="test",
+            listings_url="https://csfloat.com/api/v1/listings?limit=1&paint_index=1437",
+            item_url_template="https://csfloat.com/item/{listing_id}",
+            screenshot_url_template="https://csfloat.pics/m/{screenshot_id}/playside.png?v=3",
+            max_retries=8,
+            max_429_retries=1,
+            backoff_seconds=0.1,
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+
+        with patch("csfloat_monitor.csfloat_client.time.sleep"):
+            with self.assertRaises(RuntimeError):
+                client.fetch_all_listings()
+
+        self.assertEqual(2, calls["count"])
         client.close()
