@@ -1,0 +1,2 @@
+"""CSFloat monitor package."""
+
