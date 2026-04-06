@@ -97,6 +97,17 @@ class TelegramNotifierTests(unittest.TestCase):
         self.assertNotIn("reply_markup", payload_delisted)
         self.assertEqual("HTML", payload_new.get("parse_mode"))
 
+    def test_market_line_is_appended_to_payload(self) -> None:
+        change = ChangeSet(
+            listing_id="123",
+            change_type=CHANGE_PRICE_CHANGED,
+            listing_url="https://csfloat.com/item/123",
+            market_hash_name="Item Name",
+            deltas=[FieldDelta(field_name="price", old_value="100", new_value="150")],
+        )
+        payload = build_send_payload("111", change, price_formatter=DummyPriceFormatter(), market_line="📊 market line")
+        self.assertIn("📊 market line", payload["text"])
+
     def test_photo_payload_includes_image_and_caption(self) -> None:
         change = ChangeSet(
             listing_id="123",

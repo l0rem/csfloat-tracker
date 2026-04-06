@@ -7,6 +7,7 @@ from typing import Any
 import httpx
 
 from csfloat_monitor.currency import PriceFormatter, UsdPriceFormatter
+from csfloat_monitor.market_insights import DelistedMarketAnalyzer
 from csfloat_monitor.types import CHANGE_NEW, CHANGE_PRICE_CHANGED, ChangeSet
 
 
@@ -101,10 +102,15 @@ def build_send_payload(
     chat_id: str,
     change: ChangeSet,
     price_formatter: PriceFormatter = DEFAULT_PRICE_FORMATTER,
+    market_line: str | None = None,
 ) -> dict[str, Any]:
+    text = format_change_message(change, price_formatter=price_formatter)
+    if market_line:
+        text = f"{text}\n{market_line}"
+
     payload: dict[str, Any] = {
         "chat_id": chat_id,
-        "text": format_change_message(change, price_formatter=price_formatter),
+        "text": text,
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
@@ -119,15 +125,20 @@ def build_send_photo_payload(
     chat_id: str,
     change: ChangeSet,
     price_formatter: PriceFormatter = DEFAULT_PRICE_FORMATTER,
+    market_line: str | None = None,
 ) -> dict[str, Any]:
     image_url = change.image_url or change.screenshot_url
     if not image_url:
         raise ValueError("image_url is required for photo payload")
 
+    caption = format_change_message(change, price_formatter=price_formatter)
+    if market_line:
+        caption = f"{caption}\n{market_line}"
+
     payload: dict[str, Any] = {
         "chat_id": chat_id,
         "photo": image_url,
-        "caption": format_change_message(change, price_formatter=price_formatter),
+        "caption": caption,
         "parse_mode": "HTML",
     }
 
@@ -157,6 +168,7 @@ class TelegramNotifier:
         chat_id: str,
         timeout_seconds: float = 10,
         price_formatter: PriceFormatter = DEFAULT_PRICE_FORMATTER,
+        market_analyzer: DelistedMarketAnalyzer | None = None,
     ):
         self._chat_id = chat_id
         self._send_message_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
@@ -164,6 +176,7 @@ class TelegramNotifier:
         self._updates_url = f"https://api.telegram.org/bot{bot_token}/getUpdates"
         self._client = httpx.Client(timeout=timeout_seconds)
         self._price_formatter = price_formatter
+        self._market_analyzer = market_analyzer
         self._log = logging.getLogger("csfloat.notifier")
 
     def close(self) -> None:
@@ -171,8 +184,20 @@ class TelegramNotifier:
         self._price_formatter.close()
 
     def send_change(self, change: ChangeSet) -> None:
+        market_line = None
+        if self._market_analyzer:
+            try:
+                market_line = self._market_analyzer.build_market_line(change, self._price_formatter)
+            except Exception as exc:  # noqa: BLE001
+                self._log.warning("market_analyzer_failed listing_id=%s error=%s", change.listing_id, exc)
+
         if change.image_url or change.screenshot_url:
-            photo_payload = build_send_photo_payload(self._chat_id, change, price_formatter=self._price_formatter)
+            photo_payload = build_send_photo_payload(
+                self._chat_id,
+                change,
+                price_formatter=self._price_formatter,
+                market_line=market_line,
+            )
             try:
                 response = self._client.post(self._send_photo_url, json=photo_payload)
                 response.raise_for_status()
@@ -190,7 +215,12 @@ class TelegramNotifier:
                     change.change_type,
                 )
 
-        payload = build_send_payload(self._chat_id, change, price_formatter=self._price_formatter)
+        payload = build_send_payload(
+            self._chat_id,
+            change,
+            price_formatter=self._price_formatter,
+            market_line=market_line,
+        )
         response = self._client.post(self._send_message_url, json=payload)
         response.raise_for_status()
         self._assert_telegram_ok(response.json())

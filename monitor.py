@@ -11,6 +11,7 @@ from csfloat_monitor.config import AppConfig
 from csfloat_monitor.currency import CSFloatCurrencyPriceFormatter
 from csfloat_monitor.csfloat_client import CSFloatClient
 from csfloat_monitor.diff_engine import diff_listings
+from csfloat_monitor.market_insights import DelistedMarketAnalyzer
 from csfloat_monitor.storage import Storage
 from csfloat_monitor.telegram_notifier import TelegramNotifier
 
@@ -105,7 +106,7 @@ def cmd_run(_: argparse.Namespace) -> int:
     config = AppConfig.from_env()
     LOGGER.info(
         "startup_config db=%s proxy=%s listings_url=%s poll_interval=%ss http_max_retries=%d http_429_retries=%d "
-        "http_backoff=%.2fs "
+        "http_backoff=%.2fs market_avg_cache_ttl=%ss market_avg_min_samples=%d "
         "http_max_backoff=%.2fs http_page_delay=%.2fs display_currency=%s",
         config.redacted_database_target(),
         config.redacted_proxy_target(),
@@ -114,6 +115,8 @@ def cmd_run(_: argparse.Namespace) -> int:
         config.http_max_retries,
         config.http_429_retries,
         config.http_backoff_seconds,
+        config.market_avg_cache_ttl_seconds,
+        config.market_avg_min_samples,
         config.http_max_backoff_seconds,
         config.http_page_delay_seconds,
         config.display_currency,
@@ -150,11 +153,16 @@ def cmd_run(_: argparse.Namespace) -> int:
         cache_ttl_seconds=config.exchange_rate_cache_ttl_seconds,
         proxy=config.csfloat_proxy,
     )
+    market_analyzer = DelistedMarketAnalyzer(
+        cache_ttl_seconds=config.market_avg_cache_ttl_seconds,
+        min_samples=config.market_avg_min_samples,
+    )
     notifier = TelegramNotifier(
         bot_token=config.telegram_bot_token,
         chat_id=chat_id,
         timeout_seconds=config.http_timeout_seconds,
         price_formatter=price_formatter,
+        market_analyzer=market_analyzer,
     )
 
     try:

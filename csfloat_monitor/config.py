@@ -32,6 +32,8 @@ class AppConfig:
     http_page_delay_seconds: float
     display_currency: str
     exchange_rate_cache_ttl_seconds: int
+    market_avg_cache_ttl_seconds: int
+    market_avg_min_samples: int
     log_level: str
 
     @classmethod
@@ -75,6 +77,14 @@ class AppConfig:
         if exchange_rate_cache_ttl_seconds < 10:
             raise ValueError("EXCHANGE_RATE_CACHE_TTL_SECONDS must be >= 10")
 
+        market_avg_cache_ttl_seconds = int(os.getenv("MARKET_AVG_CACHE_TTL_SECONDS", "300"))
+        if market_avg_cache_ttl_seconds < 10:
+            raise ValueError("MARKET_AVG_CACHE_TTL_SECONDS must be >= 10")
+
+        market_avg_min_samples = int(os.getenv("MARKET_AVG_MIN_SAMPLES", "3"))
+        if market_avg_min_samples < 1:
+            raise ValueError("MARKET_AVG_MIN_SAMPLES must be >= 1")
+
         display_currency = os.getenv("DISPLAY_CURRENCY", "EUR").strip().upper()
         if not display_currency:
             raise ValueError("DISPLAY_CURRENCY must not be empty")
@@ -109,6 +119,8 @@ class AppConfig:
             http_page_delay_seconds=http_page_delay_seconds,
             display_currency=display_currency,
             exchange_rate_cache_ttl_seconds=exchange_rate_cache_ttl_seconds,
+            market_avg_cache_ttl_seconds=market_avg_cache_ttl_seconds,
+            market_avg_min_samples=market_avg_min_samples,
             log_level=log_level,
         )
 

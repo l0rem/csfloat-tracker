@@ -84,6 +84,8 @@ def diff_listings(
             FieldDelta("state", _to_text(old_listing.state), "delisted"),
             FieldDelta("price", _to_text(old_listing.price), "n/a"),
         ]
+        if old_listing.market_hash_name:
+            deltas.append(FieldDelta("market_hash_name", old_listing.market_hash_name, "n/a"))
         changes.append(
             ChangeSet(
                 listing_id=listing_id,

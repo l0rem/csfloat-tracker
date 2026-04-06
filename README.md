@@ -6,6 +6,7 @@ Local Python monitor for CSFloat listings with:
 - Photo-first Telegram alerts (in-game screenshot when available, icon fallback)
 - New listing alerts include an inspect link block when available
 - New listing alerts include seller description when present
+- Alerts include `% vs sold average` based only on historical delisted prices
 - Auto schema migrations on startup via `peewee-db-evolve`
 
 ## Requirements
@@ -93,6 +94,8 @@ Use the provided `Dockerfile` and set these environment variables:
 - `HTTP_PAGE_DELAY_SECONDS`
 - `DISPLAY_CURRENCY`
 - `EXCHANGE_RATE_CACHE_TTL_SECONDS`
+- `MARKET_AVG_CACHE_TTL_SECONDS`
+- `MARKET_AVG_MIN_SAMPLES`
 
 For 429-heavy environments (containers/VPS), increase resilience:
 - `HTTP_MAX_RETRIES=8`

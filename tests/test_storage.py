@@ -57,7 +57,7 @@ class StorageTests(unittest.TestCase):
         self.assertGreater(total_changes, count_after_first_poll)
 
         second_poll_rows = list(ItemChange.select().where(ItemChange.poll_id == poll_2.id))
-        self.assertEqual(3, len(second_poll_rows))
+        self.assertEqual(4, len(second_poll_rows))
 
         listing_rows = list(CurrentListing.select())
         self.assertEqual(1, len(listing_rows))
