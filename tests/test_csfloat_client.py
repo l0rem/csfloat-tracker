@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import unittest
 from unittest.mock import patch
 
@@ -108,4 +109,81 @@ class CSFloatClientTests(unittest.TestCase):
                 client.fetch_all_listings()
 
         self.assertEqual(2, calls["count"])
+        client.close()
+
+    def test_fetch_lowest_listing_uses_def_index_endpoint(self) -> None:
+        captured_urls: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured_urls.append(str(request.url))
+            return httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "10",
+                            "price": 1234,
+                            "state": "listed",
+                            "item": {"market_hash_name": "Test Pin"},
+                        }
+                    ]
+                },
+            )
+
+        client = CSFloatClient(
+            api_key="test",
+            listings_url="https://csfloat.com/api/v1/listings",
+            item_url_template="https://csfloat.com/item/{listing_id}",
+            screenshot_url_template="https://csfloat.pics/m/{screenshot_id}/playside.png?v=3",
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        record = client.fetch_lowest_listing(6121)
+        self.assertIsNotNone(record)
+        self.assertIn("def_index=6121", captured_urls[0])
+        self.assertEqual("10", record.listing_id if record else "")
+        client.close()
+
+    def test_fetch_sales_history_parses_rows(self) -> None:
+        def handler(_request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json=[
+                    {"id": "x1", "price": 5000, "sold_at": "2026-04-20T00:00:00Z"},
+                    {"id": "x2", "price": 4900, "sold_at": "2026-04-19T00:00:00Z"},
+                ],
+            )
+
+        client = CSFloatClient(
+            api_key="test",
+            listings_url="https://csfloat.com/api/v1/listings",
+            item_url_template="https://csfloat.com/item/{listing_id}",
+            screenshot_url_template="https://csfloat.pics/m/{screenshot_id}/playside.png?v=3",
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        rows = client.fetch_sales_history("Valeria Phoenix Pin")
+        self.assertEqual(2, len(rows))
+        self.assertEqual(5000, rows[0].sale_price)
+        self.assertEqual("x1", rows[0].listing_id)
+        client.close()
+
+    def test_buy_now_posts_bulk_buy_payload(self) -> None:
+        captured_json: list[dict] = []
+        captured_paths: list[str] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            captured_paths.append(request.url.path)
+            captured_json.append(json.loads(request.content.decode("utf-8")))
+            return httpx.Response(200, json={"ok": True})
+
+        client = CSFloatClient(
+            api_key="test",
+            listings_url="https://csfloat.com/api/v1/listings",
+            item_url_template="https://csfloat.com/item/{listing_id}",
+            screenshot_url_template="https://csfloat.pics/m/{screenshot_id}/playside.png?v=3",
+            client=httpx.Client(transport=httpx.MockTransport(handler)),
+        )
+        result = client.buy_now(listing_id="123", total_price=4500)
+        self.assertTrue(result.get("ok"))
+        self.assertEqual("/api/v1/listings/buy", captured_paths[0])
+        self.assertEqual({"total_price": 4500, "contract_ids": ["123"]}, captured_json[0])
         client.close()

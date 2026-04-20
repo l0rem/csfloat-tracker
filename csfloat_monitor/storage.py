@@ -4,10 +4,14 @@ import json
 import logging
 from collections.abc import Iterable
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from csfloat_monitor.models import (
     CurrentListing,
     ItemChange,
+    PinCallbackAction,
+    PinRecentSale,
+    PinWatchState,
     PollRun,
     Setting,
     initialize_database,
@@ -19,11 +23,13 @@ from csfloat_monitor.types import (
     CHANGE_PRICE_CHANGED,
     ChangeSet,
     ListingRecord,
+    PinSaleRecord,
 )
 
 
 class Storage:
     TELEGRAM_CHAT_ID_KEY = "telegram_chat_id"
+    TELEGRAM_CALLBACK_OFFSET_KEY = "telegram_callback_offset"
 
     def __init__(self, database_url_or_path: str):
         self._db = initialize_database(database_url_or_path)
@@ -154,6 +160,139 @@ class Storage:
     def set_telegram_chat_id(self, chat_id: str) -> None:
         self.set_setting(self.TELEGRAM_CHAT_ID_KEY, chat_id)
 
+    def get_telegram_callback_offset(self) -> int:
+        raw = self.get_setting(self.TELEGRAM_CALLBACK_OFFSET_KEY)
+        if raw in {None, ""}:
+            return 0
+        try:
+            return int(raw)
+        except ValueError:
+            return 0
+
+    def set_telegram_callback_offset(self, offset: int) -> None:
+        self.set_setting(self.TELEGRAM_CALLBACK_OFFSET_KEY, str(max(0, offset)))
+
+    def ensure_pin_watch_state(self, def_index: int) -> PinWatchState:
+        now = datetime.now(UTC)
+        PinWatchState.insert(
+            def_index=def_index,
+            created_at=now,
+            updated_at=now,
+        ).on_conflict_ignore().execute()
+        state = PinWatchState.get_or_none(PinWatchState.def_index == def_index)
+        if state is None:
+            raise RuntimeError(f"Failed to initialize pin watch state for def_index={def_index}")
+        return state
+
+    def list_active_pin_states(self) -> list[PinWatchState]:
+        return list(PinWatchState.select().where(PinWatchState.status == "active").order_by(PinWatchState.def_index.asc()))
+
+    def get_pin_watch_state(self, def_index: int) -> PinWatchState | None:
+        return PinWatchState.get_or_none(PinWatchState.def_index == def_index)
+
+    def update_pin_watch_state(
+        self,
+        def_index: int,
+        *,
+        market_hash_name: str | None = None,
+        best_listing_price: int | None = None,
+        best_sale_price: int | None = None,
+        best_known_price: int | None = None,
+        last_alert_listing_id: str | None = None,
+        last_alert_price: int | None = None,
+    ) -> None:
+        state = self.ensure_pin_watch_state(def_index)
+        now = datetime.now(UTC)
+
+        if market_hash_name:
+            state.market_hash_name = market_hash_name
+        if best_listing_price is not None:
+            state.best_listing_price = _min_or_value(state.best_listing_price, best_listing_price)
+        if best_sale_price is not None:
+            state.best_sale_price = _min_or_value(state.best_sale_price, best_sale_price)
+        if best_known_price is not None:
+            state.best_known_price = _min_or_value(state.best_known_price, best_known_price)
+        if last_alert_listing_id is not None:
+            state.last_alert_listing_id = last_alert_listing_id
+        if last_alert_price is not None:
+            state.last_alert_price = last_alert_price
+        state.updated_at = now
+        state.save()
+
+    def mark_pin_completed(self, def_index: int, purchased_listing_id: str) -> None:
+        state = self.ensure_pin_watch_state(def_index)
+        state.status = "completed"
+        state.purchased_listing_id = purchased_listing_id
+        state.updated_at = datetime.now(UTC)
+        state.save()
+
+    def replace_recent_sales(
+        self,
+        def_index: int,
+        market_hash_name: str,
+        sales: list[PinSaleRecord],
+    ) -> None:
+        now = datetime.now(UTC)
+        with self._db.atomic():
+            PinRecentSale.delete().where(PinRecentSale.def_index == def_index).execute()
+            for sale in sales:
+                PinRecentSale.create(
+                    def_index=def_index,
+                    market_hash_name=market_hash_name,
+                    sale_price=sale.sale_price,
+                    sold_at=sale.sold_at,
+                    listing_id=sale.listing_id,
+                    recorded_at=now,
+                )
+
+    def get_recent_sales(self, def_index: int, limit: int = 10) -> list[PinSaleRecord]:
+        rows = (
+            PinRecentSale.select()
+            .where(PinRecentSale.def_index == def_index)
+            .order_by(PinRecentSale.id.asc())
+            .limit(max(1, limit))
+        )
+        return [
+            PinSaleRecord(
+                sale_price=row.sale_price,
+                sold_at=row.sold_at,
+                listing_id=row.listing_id,
+            )
+            for row in rows
+        ]
+
+    def create_pin_callback_action(
+        self,
+        *,
+        def_index: int,
+        listing_id: str,
+        listing_price: int,
+        listing_url: str | None,
+    ) -> PinCallbackAction:
+        now = datetime.now(UTC)
+        action_id = uuid4().hex
+        return PinCallbackAction.create(
+            action_id=action_id,
+            def_index=def_index,
+            listing_id=listing_id,
+            listing_price=listing_price,
+            listing_url=listing_url,
+            status="pending",
+            created_at=now,
+            updated_at=now,
+        )
+
+    def get_pin_callback_action(self, action_id: str) -> PinCallbackAction | None:
+        return PinCallbackAction.get_or_none(PinCallbackAction.action_id == action_id)
+
+    def update_pin_callback_action_status(self, action_id: str, status: str) -> None:
+        action = self.get_pin_callback_action(action_id)
+        if action is None:
+            return
+        action.status = status
+        action.updated_at = datetime.now(UTC)
+        action.save()
+
 
 def _infer_image_url_from_raw_json(raw_json: str | None) -> str | None:
     if not raw_json:
@@ -204,3 +343,9 @@ def _infer_seller_description_from_raw_json(raw_json: str | None) -> str | None:
     if description in {None, ""}:
         return None
     return str(description)
+
+
+def _min_or_value(existing: int | None, candidate: int) -> int:
+    if existing is None:
+        return candidate
+    return min(existing, candidate)

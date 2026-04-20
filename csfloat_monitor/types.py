@@ -44,3 +44,25 @@ class ChangeSet:
     screenshot_url: str | None = None
     image_url: str | None = None
     inspect_link: str | None = None
+
+
+@dataclass(slots=True)
+class PinSaleRecord:
+    sale_price: int
+    sold_at: str | None = None
+    listing_id: str | None = None
+
+
+@dataclass(slots=True)
+class PinAlert:
+    def_index: int
+    market_hash_name: str
+    listing_id: str
+    listing_price: int
+    listing_url: str
+    image_url: str | None
+    trigger_type: str  # "new_low" | "tied_low"
+    best_known_price: int
+    cheapest_sale_price: int | None
+    percent_below_cheapest_sale: float | None
+    recent_sales: list[PinSaleRecord] = field(default_factory=list)

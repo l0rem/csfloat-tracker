@@ -95,6 +95,50 @@ class Setting(BaseModel):
         table_name = "settings"
 
 
+class PinWatchState(BaseModel):
+    def_index = IntegerField(primary_key=True)
+    market_hash_name = TextField(null=True)
+    status = CharField(default="active", index=True)
+    best_listing_price = IntegerField(null=True)
+    best_sale_price = IntegerField(null=True)
+    best_known_price = IntegerField(null=True)
+    last_alert_listing_id = CharField(null=True)
+    last_alert_price = IntegerField(null=True)
+    purchased_listing_id = CharField(null=True)
+    created_at = DateTimeField(default=utc_now)
+    updated_at = DateTimeField(default=utc_now)
+
+    class Meta:
+        table_name = "pin_watch_states"
+
+
+class PinRecentSale(BaseModel):
+    id = AutoField()
+    def_index = IntegerField(index=True)
+    market_hash_name = TextField(null=True)
+    sale_price = IntegerField()
+    sold_at = TextField(null=True)
+    listing_id = CharField(null=True)
+    recorded_at = DateTimeField(default=utc_now)
+
+    class Meta:
+        table_name = "pin_recent_sales"
+
+
+class PinCallbackAction(BaseModel):
+    action_id = CharField(primary_key=True)
+    def_index = IntegerField(index=True)
+    listing_id = CharField()
+    listing_price = IntegerField()
+    listing_url = TextField(null=True)
+    status = CharField(default="pending", index=True)
+    created_at = DateTimeField(default=utc_now)
+    updated_at = DateTimeField(default=utc_now)
+
+    class Meta:
+        table_name = "pin_callback_actions"
+
+
 def initialize_database(database_url_or_path: str) -> Database:
     db = _build_database(database_url_or_path)
     db_proxy.initialize(db)
@@ -225,12 +269,34 @@ def run_unattended_migrations() -> None:
     db = get_database()
     try:
         _patch_peeweedbevolve_sqlite_support()
-        db.create_tables([PollRun, CurrentListing, ItemChange, Setting], safe=True)
+        db.create_tables(
+            [
+                PollRun,
+                CurrentListing,
+                ItemChange,
+                Setting,
+                PinWatchState,
+                PinRecentSale,
+                PinCallbackAction,
+            ],
+            safe=True,
+        )
         db.evolve(interactive=False)
     except Exception as exc:
         # peewee-db-evolve does not support altering SQLite column types.
         # Fallback to safe table creation so startup stays unattended.
         if peeweedbevolve.is_sqlite(db) and "change a column type" in str(exc).lower():
-            db.create_tables([PollRun, CurrentListing, ItemChange, Setting], safe=True)
+            db.create_tables(
+                [
+                    PollRun,
+                    CurrentListing,
+                    ItemChange,
+                    Setting,
+                    PinWatchState,
+                    PinRecentSale,
+                    PinCallbackAction,
+                ],
+                safe=True,
+            )
             return
         raise RuntimeError(f"Automatic migrations failed: {exc}") from exc

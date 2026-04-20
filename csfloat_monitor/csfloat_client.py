@@ -7,11 +7,11 @@ import time
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
-from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit, urlunsplit
 
 import httpx
 
-from csfloat_monitor.types import ListingRecord
+from csfloat_monitor.types import ListingRecord, PinSaleRecord
 
 
 STEAM_ICON_URL_PREFIX = "https://steamcommunity-a.akamaihd.net/economy/image/"
@@ -80,16 +80,86 @@ class CSFloatClient:
 
         return records
 
+    def fetch_lowest_listing(self, def_index: int) -> ListingRecord | None:
+        url = self._build_listings_url_for_def_index(def_index)
+        self._log.info("fetch_lowest_listing_start def_index=%s", def_index)
+        payload = self._request_json(url)
+        rows = payload.get("data", [])
+        if not rows:
+            self._log.warning("fetch_lowest_listing_empty def_index=%s", def_index)
+            return None
+        record = self._normalize_listing(rows[0])
+        self._log.info(
+            "fetch_lowest_listing_success def_index=%s listing_id=%s price=%s market_hash_name=%s",
+            def_index,
+            record.listing_id,
+            record.price,
+            record.market_hash_name,
+        )
+        return record
+
+    def fetch_sales_history(self, market_hash_name: str) -> list[PinSaleRecord]:
+        encoded_name = quote(market_hash_name, safe="")
+        url = f"https://csfloat.com/api/v1/history/{encoded_name}/sales"
+        self._log.info("fetch_sales_history_start market_hash_name=%s", market_hash_name)
+        payload = self._request_json(url)
+        if not isinstance(payload, list):
+            self._log.warning("fetch_sales_history_unexpected_payload market_hash_name=%s", market_hash_name)
+            return []
+        sales: list[PinSaleRecord] = []
+        for row in payload:
+            raw_price = row.get("price")
+            if raw_price is None:
+                continue
+            try:
+                sale_price = int(raw_price)
+            except (TypeError, ValueError):
+                continue
+            sales.append(
+                PinSaleRecord(
+                    sale_price=sale_price,
+                    sold_at=row.get("sold_at"),
+                    listing_id=str(row.get("id")) if row.get("id") is not None else None,
+                )
+            )
+        self._log.info("fetch_sales_history_success market_hash_name=%s rows=%d", market_hash_name, len(sales))
+        return sales
+
+    def buy_now(self, *, listing_id: str, total_price: int) -> dict[str, Any]:
+        payload = {
+            "total_price": int(total_price),
+            "contract_ids": [str(listing_id)],
+        }
+        self._log.info("buy_now_start listing_id=%s total_price=%s", listing_id, total_price)
+        result = self._request_json(
+            "https://csfloat.com/api/v1/listings/buy",
+            method="POST",
+            json_payload=payload,
+        )
+        self._log.info("buy_now_success listing_id=%s total_price=%s", listing_id, total_price)
+        return result
+
     def _request_page(self, cursor: str | None) -> dict[str, Any]:
         url = self._with_cursor(self._listings_url, cursor)
+        return self._request_json(url)
+
+    def _request_json(
+        self,
+        url: str,
+        *,
+        method: str = "GET",
+        json_payload: Any | None = None,
+    ) -> Any:
 
         last_exc: Exception | None = None
         retry_429_used = 0
         for attempt in range(1, self._max_retries + 1):
             try:
-                response = self._client.get(
+                response = self._client.request(
+                    method,
                     url,
                     headers={"Authorization": self._api_key},
+                    json=json_payload,
                 )
                 if response.status_code in {429, 500, 502, 503, 504}:
                     status_exc = httpx.HTTPStatusError(
@@ -140,6 +210,10 @@ class CSFloatClient:
             f"Failed to fetch CSFloat listings after {self._max_retries} attempts "
             f"(429 retries used: {retry_429_used}/{self._max_429_retries}): {last_exc}"
         )
+
+    @staticmethod
+    def _build_listings_url_for_def_index(def_index: int) -> str:
+        return f"https://csfloat.com/api/v1/listings?limit=1&sort_by=lowest_price&def_index={int(def_index)}"
 
     def _compute_retry_delay(self, attempt: int, response: httpx.Response | None) -> float:
         # Honor Retry-After for explicit server-side throttling.

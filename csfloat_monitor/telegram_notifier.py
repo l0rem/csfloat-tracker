@@ -8,7 +8,7 @@ import httpx
 
 from csfloat_monitor.currency import PriceFormatter, UsdPriceFormatter
 from csfloat_monitor.market_insights import DelistedMarketAnalyzer
-from csfloat_monitor.types import CHANGE_NEW, CHANGE_PRICE_CHANGED, ChangeSet
+from csfloat_monitor.types import CHANGE_NEW, CHANGE_PRICE_CHANGED, ChangeSet, PinAlert
 
 
 DEFAULT_PRICE_FORMATTER = UsdPriceFormatter()
@@ -173,6 +173,10 @@ class TelegramNotifier:
         self._chat_id = chat_id
         self._send_message_url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
         self._send_photo_url = f"https://api.telegram.org/bot{bot_token}/sendPhoto"
+        self._edit_message_text_url = f"https://api.telegram.org/bot{bot_token}/editMessageText"
+        self._edit_message_caption_url = f"https://api.telegram.org/bot{bot_token}/editMessageCaption"
+        self._edit_message_reply_markup_url = f"https://api.telegram.org/bot{bot_token}/editMessageReplyMarkup"
+        self._answer_callback_url = f"https://api.telegram.org/bot{bot_token}/answerCallbackQuery"
         self._updates_url = f"https://api.telegram.org/bot{bot_token}/getUpdates"
         self._client = httpx.Client(timeout=timeout_seconds)
         self._price_formatter = price_formatter
@@ -270,3 +274,163 @@ class TelegramNotifier:
             )
 
         return best_chat_id
+
+    def send_pin_alert(self, alert: PinAlert, action_id: str) -> dict[str, Any]:
+        caption = self._format_pin_alert_message(alert)
+        reply_markup = self._build_pin_buy_markup(action_id)
+
+        if alert.image_url:
+            payload = {
+                "chat_id": self._chat_id,
+                "photo": alert.image_url,
+                "caption": caption,
+                "parse_mode": "HTML",
+                "reply_markup": reply_markup,
+            }
+            response = self._client.post(self._send_photo_url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            self._assert_telegram_ok(data)
+            return data
+
+        payload = {
+            "chat_id": self._chat_id,
+            "text": caption,
+            "parse_mode": "HTML",
+            "reply_markup": reply_markup,
+            "disable_web_page_preview": True,
+        }
+        response = self._client.post(self._send_message_url, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        self._assert_telegram_ok(data)
+        return data
+
+    def fetch_updates(self, *, offset: int) -> list[dict[str, Any]]:
+        params = {
+            "offset": offset,
+            "timeout": 0,
+            "allowed_updates": '["callback_query"]',
+        }
+        response = self._client.get(self._updates_url, params=params)
+        response.raise_for_status()
+        payload = response.json()
+        self._assert_telegram_ok(payload)
+        return payload.get("result", [])
+
+    def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> None:
+        payload: dict[str, Any] = {"callback_query_id": callback_query_id}
+        if text:
+            payload["text"] = text
+        response = self._client.post(self._answer_callback_url, json=payload)
+        response.raise_for_status()
+        self._assert_telegram_ok(response.json())
+
+    def set_confirm_markup(self, chat_id: int | str, message_id: int, action_id: str) -> None:
+        payload = {
+            "chat_id": str(chat_id),
+            "message_id": message_id,
+            "reply_markup": self._build_confirm_markup(action_id),
+        }
+        response = self._client.post(self._edit_message_reply_markup_url, json=payload)
+        response.raise_for_status()
+        self._assert_telegram_ok(response.json())
+
+    def set_buy_markup(self, chat_id: int | str, message_id: int, action_id: str) -> None:
+        payload = {
+            "chat_id": str(chat_id),
+            "message_id": message_id,
+            "reply_markup": self._build_pin_buy_markup(action_id),
+        }
+        response = self._client.post(self._edit_message_reply_markup_url, json=payload)
+        response.raise_for_status()
+        self._assert_telegram_ok(response.json())
+
+    def append_status_to_message(
+        self,
+        *,
+        chat_id: int | str,
+        message_id: int,
+        is_photo: bool,
+        original_text: str,
+        status_line: str,
+    ) -> None:
+        text = f"{original_text}\n\n{status_line}"
+        payload: dict[str, Any] = {
+            "chat_id": str(chat_id),
+            "message_id": message_id,
+            "parse_mode": "HTML",
+            "reply_markup": {"inline_keyboard": []},
+        }
+        if is_photo:
+            payload["caption"] = text
+            response = self._client.post(self._edit_message_caption_url, json=payload)
+        else:
+            payload["text"] = text
+            response = self._client.post(self._edit_message_text_url, json=payload)
+        response.raise_for_status()
+        self._assert_telegram_ok(response.json())
+
+    def _format_pin_alert_message(self, alert: PinAlert) -> str:
+        trigger_label = "🔥 <b>NEW LOW</b>" if alert.trigger_type == "new_low" else "🟰 <b>TIED LOW</b>"
+        lines = [
+            f"{trigger_label}",
+            f"🎯 <b>Item:</b> {html.escape(alert.market_hash_name)}",
+            f"🧩 <b>Def Index:</b> <code>{alert.def_index}</code>",
+            f"🆔 <b>Listing:</b> <code>{html.escape(alert.listing_id)}</code>",
+            f"💶 <b>Price:</b> <code>{html.escape(self._price_formatter.format_price(str(alert.listing_price)))}</code>",
+            f"🏁 <b>Best Known:</b> <code>{html.escape(self._price_formatter.format_price(str(alert.best_known_price)))}</code>",
+        ]
+        if alert.cheapest_sale_price is None:
+            lines.append("📉 <b>Vs Cheapest Sale:</b> <code>n/a</code>")
+        else:
+            sign = "-" if (alert.percent_below_cheapest_sale or 0) >= 0 else "+"
+            pct = abs(alert.percent_below_cheapest_sale or 0.0)
+            lines.append(
+                f"📉 <b>Vs Cheapest Sale:</b> <code>{sign}{pct:.2f}%</code> "
+                f"(sale <code>{html.escape(self._price_formatter.format_price(str(alert.cheapest_sale_price)))}</code>)"
+            )
+
+        lines.append("")
+        lines.append("📚 <b>Last 10 Sales</b>")
+        if not alert.recent_sales:
+            lines.append("• <code>n/a</code>")
+        else:
+            for sale in alert.recent_sales[:10]:
+                sold_at = (sale.sold_at or "unknown time").replace("T", " ").replace("Z", " UTC")
+                price_text = self._price_formatter.format_price(str(sale.sale_price))
+                lines.append(f"• <code>{html.escape(price_text)}</code> — {html.escape(sold_at)}")
+
+        lines.append("")
+        lines.append(f"🔗 <a href=\"{html.escape(alert.listing_url)}\">Open on CSFloat</a>")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _build_pin_buy_markup(action_id: str) -> dict[str, Any]:
+        return {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "Buy",
+                        "callback_data": f"buy:{action_id}",
+                    }
+                ]
+            ]
+        }
+
+    @staticmethod
+    def _build_confirm_markup(action_id: str) -> dict[str, Any]:
+        return {
+            "inline_keyboard": [
+                [
+                    {
+                        "text": "Yes",
+                        "callback_data": f"confirm_yes:{action_id}",
+                    },
+                    {
+                        "text": "No",
+                        "callback_data": f"confirm_no:{action_id}",
+                    },
+                ]
+            ]
+        }

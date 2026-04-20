@@ -11,6 +11,7 @@ from csfloat_monitor.proxy import normalize_proxy_url, redact_proxy_url
 DEFAULT_LISTINGS_URL = "https://csfloat.com/api/v1/listings?limit=40&max_price=46364&paint_index=1437"
 DEFAULT_ITEM_URL_TEMPLATE = "https://csfloat.com/item/{listing_id}"
 DEFAULT_SCREENSHOT_URL_TEMPLATE = "https://csfloat.pics/m/{screenshot_id}/playside.png?v=3"
+DEFAULT_PIN_DEF_INDEXES = [4682, 6134, 6101, 6102, 6132, 6121]
 
 
 @dataclass(slots=True)
@@ -35,6 +36,9 @@ class AppConfig:
     market_avg_cache_ttl_seconds: int
     market_avg_min_samples: int
     log_level: str
+    pin_target_def_indexes: list[int]
+    pin_sales_rows: int
+    telegram_updates_poll_seconds: float
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -93,6 +97,27 @@ class AppConfig:
         if log_level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
             raise ValueError("LOG_LEVEL must be one of DEBUG, INFO, WARNING, ERROR, CRITICAL")
 
+        pin_indexes_raw = os.getenv(
+            "CSFLOAT_TARGET_DEF_INDEXES",
+            ",".join(str(v) for v in DEFAULT_PIN_DEF_INDEXES),
+        ).strip()
+        pin_target_def_indexes: list[int] = []
+        for part in pin_indexes_raw.split(","):
+            token = part.strip()
+            if not token:
+                continue
+            pin_target_def_indexes.append(int(token))
+        if not pin_target_def_indexes:
+            raise ValueError("CSFLOAT_TARGET_DEF_INDEXES must include at least one def_index")
+
+        pin_sales_rows = int(os.getenv("PIN_SALES_ROWS", "10"))
+        if pin_sales_rows < 1:
+            raise ValueError("PIN_SALES_ROWS must be >= 1")
+
+        telegram_updates_poll_seconds = float(os.getenv("TELEGRAM_UPDATES_POLL_SECONDS", "1.5"))
+        if telegram_updates_poll_seconds < 0:
+            raise ValueError("TELEGRAM_UPDATES_POLL_SECONDS must be >= 0")
+
         csfloat_proxy = normalize_proxy_url(os.getenv("CSFLOAT_PROXY", "").strip())
 
         return cls(
@@ -122,6 +147,9 @@ class AppConfig:
             market_avg_cache_ttl_seconds=market_avg_cache_ttl_seconds,
             market_avg_min_samples=market_avg_min_samples,
             log_level=log_level,
+            pin_target_def_indexes=pin_target_def_indexes,
+            pin_sales_rows=pin_sales_rows,
+            telegram_updates_poll_seconds=telegram_updates_poll_seconds,
         )
 
     def redacted_database_target(self) -> str:

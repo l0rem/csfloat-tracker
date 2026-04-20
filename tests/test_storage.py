@@ -63,3 +63,22 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(1, len(listing_rows))
         self.assertEqual("1", listing_rows[0].listing_id)
         self.assertEqual(135, listing_rows[0].price)
+
+    def test_pin_state_and_callback_offset_persist(self) -> None:
+        self.storage.ensure_pin_watch_state(6121)
+        self.storage.update_pin_watch_state(
+            6121,
+            market_hash_name="Valeria Phoenix Pin",
+            best_listing_price=5000,
+            best_sale_price=5100,
+            best_known_price=5000,
+            last_alert_listing_id="abc",
+            last_alert_price=5000,
+        )
+        self.storage.set_telegram_callback_offset(42)
+
+        state = self.storage.get_pin_watch_state(6121)
+        self.assertIsNotNone(state)
+        self.assertEqual("Valeria Phoenix Pin", state.market_hash_name if state else "")
+        self.assertEqual(5000, state.best_known_price if state else -1)
+        self.assertEqual(42, self.storage.get_telegram_callback_offset())

@@ -1,12 +1,12 @@
 # CSFloat Listing Monitor
 
-Local Python monitor for CSFloat listings with:
-- PostgreSQL snapshot + append-only item change history
-- Telegram notifications for new listings, price changes, and delists
-- Photo-first Telegram alerts (in-game screenshot when available, icon fallback)
-- New listing alerts include an inspect link block when available
-- New listing alerts include seller description when present
-- Alerts include `% vs sold average` based only on historical delisted prices
+Local Python monitor for CSFloat profile pins with:
+- Persistent per-pin best-known pricing state across restarts
+- Startup bootstrap from live lowest listing + recent sales history
+- Telegram alerts only for `new low` / `tied low` events
+- Photo-first alerts (screenshot/icon) with last 10 sales in the message
+- Inline buy flow: `Buy` -> `Confirm? (Yes/No)` -> API purchase attempt
+- Automatic pin completion (stop watching) after successful purchase
 - Auto schema migrations on startup via `peewee-db-evolve`
 
 ## Requirements
@@ -40,11 +40,11 @@ uv run python monitor.py run
 
 The script will:
 1. Auto-run unattended migrations.
-2. Execute startup diff against existing DB snapshot.
-3. Poll every 30 seconds (or `POLL_INTERVAL_SECONDS`).
-4. Persist append-only row-level change history in `item_changes`.
-5. Send immediate Telegram messages with changed fields and old/new values.
-6. Emit detailed lifecycle logs to stdout and `./logs/monitor.log` for deploy debugging.
+2. Bootstrap configured pins from live listings and sales history.
+3. Poll every 30 seconds (or `POLL_INTERVAL_SECONDS`) for lowest listing changes.
+4. Send Telegram alerts only when a listing hits a new/tied best-known price.
+5. Handle inline callback actions to confirm/cancel purchases.
+6. Persist pin state, callback offsets, and callback action idempotency.
 
 ## Tests
 
@@ -55,8 +55,9 @@ uv run python -m unittest discover -s tests -p "test_*.py"
 ## Notes
 
 - Rotate exposed credentials and keep `.env` local.
-- Listing button URL defaults to `https://csfloat.com/item/{listing_id}`.
+- Listing URL defaults to `https://csfloat.com/item/{listing_id}`.
 - Screenshot URL defaults to `https://csfloat.pics/m/{screenshot_id}/playside.png?v=3`.
+- Buy endpoint used for confirmations: `POST /api/v1/listings/buy`.
 - Supabase/Postgres is configured through `DATABASE_URL`.
 - Use the exact Postgres URI from Supabase Dashboard (`Connect`), because host/user formats vary by region/pooler.
 - `SQLITE_PATH` still works as an optional local fallback for dev/testing.
@@ -86,6 +87,9 @@ Use the provided `Dockerfile` and set these environment variables:
 - `DATABASE_URL` (Supabase, include `?sslmode=require`)
 - `LOG_LEVEL` (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`)
 - `POLL_INTERVAL_SECONDS`
+- `CSFLOAT_TARGET_DEF_INDEXES` (comma-separated pin def indexes)
+- `PIN_SALES_ROWS` (last N sales included in notifications)
+- `TELEGRAM_UPDATES_POLL_SECONDS` (callback polling cadence)
 - `HTTP_TIMEOUT_SECONDS`
 - `HTTP_MAX_RETRIES`
 - `HTTP_429_RETRIES`

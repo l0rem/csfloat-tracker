@@ -12,6 +12,11 @@ from csfloat_monitor.currency import CSFloatCurrencyPriceFormatter
 from csfloat_monitor.csfloat_client import CSFloatClient
 from csfloat_monitor.diff_engine import diff_listings
 from csfloat_monitor.market_insights import DelistedMarketAnalyzer
+from csfloat_monitor.pin_watcher import (
+    bootstrap_pin_states,
+    process_telegram_callbacks,
+    run_pin_watch_poll,
+)
 from csfloat_monitor.storage import Storage
 from csfloat_monitor.telegram_notifier import TelegramNotifier
 
@@ -107,7 +112,7 @@ def cmd_run(_: argparse.Namespace) -> int:
     LOGGER.info(
         "startup_config db=%s proxy=%s listings_url=%s poll_interval=%ss http_max_retries=%d http_429_retries=%d "
         "http_backoff=%.2fs market_avg_cache_ttl=%ss market_avg_min_samples=%d "
-        "http_max_backoff=%.2fs http_page_delay=%.2fs display_currency=%s",
+        "http_max_backoff=%.2fs http_page_delay=%.2fs display_currency=%s pin_def_indexes=%s pin_sales_rows=%d",
         config.redacted_database_target(),
         config.redacted_proxy_target(),
         config.csfloat_listings_url,
@@ -120,9 +125,12 @@ def cmd_run(_: argparse.Namespace) -> int:
         config.http_max_backoff_seconds,
         config.http_page_delay_seconds,
         config.display_currency,
+        config.pin_target_def_indexes,
+        config.pin_sales_rows,
     )
     storage = Storage(config.database_url)
     storage.run_migrations()
+    LOGGER.info("startup_phase_complete phase=migrations")
 
     chat_id = config.telegram_chat_id or storage.get_telegram_chat_id()
     if not chat_id:
@@ -153,36 +161,91 @@ def cmd_run(_: argparse.Namespace) -> int:
         cache_ttl_seconds=config.exchange_rate_cache_ttl_seconds,
         proxy=config.csfloat_proxy,
     )
-    market_analyzer = DelistedMarketAnalyzer(
-        cache_ttl_seconds=config.market_avg_cache_ttl_seconds,
-        min_samples=config.market_avg_min_samples,
-    )
     notifier = TelegramNotifier(
         bot_token=config.telegram_bot_token,
         chat_id=chat_id,
         timeout_seconds=config.http_timeout_seconds,
         price_formatter=price_formatter,
-        market_analyzer=market_analyzer,
+        market_analyzer=DelistedMarketAnalyzer(
+            cache_ttl_seconds=config.market_avg_cache_ttl_seconds,
+            min_samples=config.market_avg_min_samples,
+        ),
     )
 
     try:
         try:
-            run_single_poll(storage, csfloat_client, notifier, is_startup=True)
+            bootstrap_stats = bootstrap_pin_states(
+                storage=storage,
+                client=csfloat_client,
+                def_indexes=config.pin_target_def_indexes,
+                sales_rows=config.pin_sales_rows,
+            )
+            LOGGER.info(
+                "startup_phase_complete phase=bootstrap requested=%d initialized=%d no_listing=%d sales_loaded=%d sales_missing=%d",
+                bootstrap_stats.requested,
+                bootstrap_stats.initialized,
+                bootstrap_stats.no_listing,
+                bootstrap_stats.sales_loaded,
+                bootstrap_stats.sales_missing,
+            )
         except Exception as exc:  # noqa: BLE001
             if _is_rate_limited_error(exc):
-                LOGGER.warning("startup_poll_rate_limited error=%s", exc)
+                LOGGER.warning("startup_bootstrap_rate_limited error=%s", exc)
             else:
-                LOGGER.exception("startup_poll_failed error=%s", exc)
+                LOGGER.exception("startup_bootstrap_failed error=%s", exc)
 
+        next_poll_at = time.monotonic()
+        LOGGER.info(
+            "watcher_loop_started poll_interval_s=%s callback_poll_s=%.2f active_pin_targets=%d",
+            config.poll_interval_seconds,
+            config.telegram_updates_poll_seconds,
+            len(config.pin_target_def_indexes),
+        )
         while True:
-            time.sleep(config.poll_interval_seconds)
             try:
-                run_single_poll(storage, csfloat_client, notifier, is_startup=False)
+                callback_stats = process_telegram_callbacks(
+                    storage=storage,
+                    client=csfloat_client,
+                    notifier=notifier,
+                )
+                if callback_stats.callbacks_processed:
+                    LOGGER.info(
+                        "callbacks_processed count=%d purchases_succeeded=%d",
+                        callback_stats.callbacks_processed,
+                        callback_stats.purchases_succeeded,
+                    )
             except Exception as exc:  # noqa: BLE001
-                if _is_rate_limited_error(exc):
-                    LOGGER.warning("poll_loop_rate_limited error=%s", exc)
-                else:
-                    LOGGER.exception("poll_loop_failed error=%s", exc)
+                LOGGER.exception("callback_processing_failed error=%s", exc)
+
+            now = time.monotonic()
+            if now >= next_poll_at:
+                try:
+                    poll_stats = run_pin_watch_poll(
+                        storage=storage,
+                        client=csfloat_client,
+                        notifier=notifier,
+                        sales_rows=config.pin_sales_rows,
+                    )
+                    LOGGER.info(
+                        "pin_watch_poll_complete polled=%d alerts=%d new_low=%d tied_low=%d duplicates=%d above_threshold=%d no_listing=%d no_baseline=%d",
+                        poll_stats.polled,
+                        poll_stats.alerts_sent,
+                        poll_stats.new_low_alerts,
+                        poll_stats.tied_low_alerts,
+                        poll_stats.duplicate_skipped,
+                        poll_stats.above_threshold,
+                        poll_stats.no_listing,
+                        poll_stats.no_baseline,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    if _is_rate_limited_error(exc):
+                        LOGGER.warning("poll_loop_rate_limited error=%s", exc)
+                    else:
+                        LOGGER.exception("poll_loop_failed error=%s", exc)
+                next_poll_at = now + float(config.poll_interval_seconds)
+
+            sleep_seconds = config.telegram_updates_poll_seconds if config.telegram_updates_poll_seconds > 0 else 0.2
+            time.sleep(sleep_seconds)
     finally:
         csfloat_client.close()
         notifier.close()
