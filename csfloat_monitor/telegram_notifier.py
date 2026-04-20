@@ -400,14 +400,20 @@ class TelegramNotifier:
         self._assert_telegram_ok(response.json())
 
     def _format_pin_alert_message(self, alert: PinAlert) -> str:
-        trigger_label = "🔥 <b>NEW LOW</b>" if alert.trigger_type == "new_low" else "🟰 <b>TIED LOW</b>"
+        trigger_label = "📉 <b>NEW CHEAPEST LISTING</b>"
         lines = [
             f"{trigger_label}",
             f"🎯 <b>Item:</b> {html.escape(alert.market_hash_name)}",
             f"🧩 <b>Def Index:</b> <code>{alert.def_index}</code>",
             f"🆔 <b>Listing:</b> <code>{html.escape(alert.listing_id)}</code>",
             f"💶 <b>Price:</b> <code>{html.escape(self._price_formatter.format_price(str(alert.listing_price)))}</code>",
-            f"🏁 <b>Best Known:</b> <code>{html.escape(self._price_formatter.format_price(str(alert.best_known_price)))}</code>",
+            f"⏮️ <b>Previous Lowest:</b> <code>{html.escape(self._price_formatter.format_price(str(alert.previous_lowest_price)))}</code>",
+            f"🏁 <b>Absolute Lowest:</b> <code>{html.escape(self._price_formatter.format_price(str(alert.absolute_lowest_price)))}</code>",
+            (
+                "📊 <b>Difference:</b> "
+                f"<code>-{html.escape(self._price_formatter.format_price(str(alert.absolute_drop_price)))}</code> "
+                f"(<code>-{alert.absolute_drop_percent:.2f}%</code>)"
+            ),
         ]
         if alert.cheapest_sale_price is None:
             lines.append("📉 <b>Vs Cheapest Sale:</b> <code>n/a</code>")

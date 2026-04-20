@@ -99,6 +99,8 @@ class PinWatchState(BaseModel):
     def_index = IntegerField(primary_key=True)
     market_hash_name = TextField(null=True)
     status = CharField(default="active", index=True)
+    current_lowest_listing_id = CharField(null=True)
+    current_lowest_listing_price = IntegerField(null=True)
     best_listing_price = IntegerField(null=True)
     best_sale_price = IntegerField(null=True)
     best_known_price = IntegerField(null=True)

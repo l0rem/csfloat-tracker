@@ -61,8 +61,11 @@ class PinAlert:
     listing_price: int
     listing_url: str
     image_url: str | None
-    trigger_type: str  # "new_low" | "tied_low"
-    best_known_price: int
+    trigger_type: str  # "new_cheapest_current"
+    previous_lowest_price: int
+    absolute_lowest_price: int
+    absolute_drop_price: int
+    absolute_drop_percent: float
     cheapest_sale_price: int | None
     percent_below_cheapest_sale: float | None
     recent_sales: list[PinSaleRecord] = field(default_factory=list)

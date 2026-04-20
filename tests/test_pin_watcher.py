@@ -60,13 +60,22 @@ class FakeClient:
 
 class FakeNotifier:
     def __init__(self):
-        self.alerts: list[tuple[str, str]] = []
+        self.alerts: list[tuple[str, int, int, int, float, str]] = []
         self.sale_alerts: list[tuple[int, int, float]] = []
         self._updates: list[dict] = []
         self.actions: list[tuple[str, str]] = []
 
     def send_pin_alert(self, alert, action_id: str):  # noqa: ANN001
-        self.alerts.append((alert.trigger_type, action_id))
+        self.alerts.append(
+            (
+                alert.trigger_type,
+                alert.previous_lowest_price,
+                alert.absolute_lowest_price,
+                alert.absolute_drop_price,
+                alert.absolute_drop_percent,
+                action_id,
+            )
+        )
         return {"ok": True}
 
     def send_pin_sale_alert(self, alert):  # noqa: ANN001
@@ -107,13 +116,13 @@ class PinWatcherTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.tmp_dir.cleanup()
 
-    def test_low_and_tie_alerts_with_dedupe(self) -> None:
+    def test_alerts_when_new_cheapest_replaces_previous_cheapest(self) -> None:
         def_index = 6121
         market = "Valeria Phoenix Pin"
         first = make_listing(def_index, "L1", 5000, market_hash_name=market)
         second = make_listing(def_index, "L2", 4800, market_hash_name=market)
         third = make_listing(def_index, "L2", 4800, market_hash_name=market)
-        fourth = make_listing(def_index, "L3", 4800, market_hash_name=market)
+        fourth = make_listing(def_index, "L4", 4700, market_hash_name=market)
 
         client = FakeClient(
             listings={def_index: [first, second, third, fourth]},
@@ -132,9 +141,21 @@ class PinWatcherTests(unittest.TestCase):
         stats_3 = run_pin_watch_poll(storage=self.storage, client=client, notifier=notifier, sales_rows=10)
 
         self.assertEqual(1, stats_1.alerts_sent)
-        self.assertEqual(0, stats_2.alerts_sent)  # duplicate listing id/price
-        self.assertEqual(1, stats_3.alerts_sent)  # tie alert with new listing id
-        self.assertEqual(["new_low", "tied_low"], [kind for kind, _ in notifier.alerts])
+        self.assertEqual(0, stats_2.alerts_sent)  # unchanged cheapest
+        self.assertEqual(1, stats_3.alerts_sent)  # cheaper listing replaced previous cheapest
+        self.assertEqual(2, len(notifier.alerts))
+        self.assertEqual(
+            ["new_cheapest_current", "new_cheapest_current"],
+            [kind for kind, *_ in notifier.alerts],
+        )
+        self.assertEqual(5000, notifier.alerts[0][1])  # previous lowest
+        self.assertEqual(4800, notifier.alerts[0][2])  # absolute lowest (new)
+        self.assertEqual(200, notifier.alerts[0][3])   # absolute EUR drop
+        self.assertAlmostEqual(4.0, notifier.alerts[0][4], places=2)
+        self.assertEqual(4800, notifier.alerts[1][1])
+        self.assertEqual(4700, notifier.alerts[1][2])
+        self.assertEqual(100, notifier.alerts[1][3])
+        self.assertAlmostEqual(2.083333, notifier.alerts[1][4], places=4)
 
     def test_confirm_yes_purchases_and_completes_pin(self) -> None:
         def_index = 6102

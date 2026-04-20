@@ -195,6 +195,8 @@ class Storage:
         def_index: int,
         *,
         market_hash_name: str | None = None,
+        current_lowest_listing_id: str | None = None,
+        current_lowest_listing_price: int | None = None,
         best_listing_price: int | None = None,
         best_sale_price: int | None = None,
         best_known_price: int | None = None,
@@ -209,6 +211,10 @@ class Storage:
 
         if market_hash_name:
             state.market_hash_name = market_hash_name
+        if current_lowest_listing_id is not None:
+            state.current_lowest_listing_id = current_lowest_listing_id
+        if current_lowest_listing_price is not None:
+            state.current_lowest_listing_price = current_lowest_listing_price
         if best_listing_price is not None:
             state.best_listing_price = _min_or_value(state.best_listing_price, best_listing_price)
         if best_sale_price is not None:
