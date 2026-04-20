@@ -13,6 +13,7 @@ from csfloat_monitor.types import (
     CHANGE_PRICE_CHANGED,
     ChangeSet,
     FieldDelta,
+    PinSaleAlert,
 )
 
 
@@ -123,3 +124,29 @@ class TelegramNotifierTests(unittest.TestCase):
         self.assertIn("caption", payload)
         self.assertEqual("HTML", payload.get("parse_mode"))
         self.assertIn("reply_markup", payload)
+
+    def test_pin_sale_alert_message_includes_premium_and_lowest(self) -> None:
+        from csfloat_monitor.telegram_notifier import TelegramNotifier
+
+        notifier = TelegramNotifier(bot_token="token", chat_id="111", price_formatter=DummyPriceFormatter())
+        try:
+            message = notifier._format_pin_sale_alert_message(  # noqa: SLF001
+                PinSaleAlert(
+                    def_index=6121,
+                    market_hash_name="Valeria Phoenix Pin",
+                    sale_price=5400,
+                    lowest_known_price=4800,
+                    percent_above_lowest_known=12.5,
+                    sold_at="2026-04-20T10:00:00Z",
+                    sale_listing_id="S2",
+                    image_url="https://example.com/pin.png",
+                    listing_url="https://csfloat.com/item/L1",
+                )
+            )
+        finally:
+            notifier.close()
+
+        self.assertIn("NEW SALE DETECTED", message)
+        self.assertIn("EUR(5400)", message)
+        self.assertIn("+12.50%", message)
+        self.assertIn("EUR(4800)", message)

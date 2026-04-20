@@ -200,6 +200,9 @@ class Storage:
         best_known_price: int | None = None,
         last_alert_listing_id: str | None = None,
         last_alert_price: int | None = None,
+        last_sale_listing_id: str | None = None,
+        last_sale_price: int | None = None,
+        last_sale_sold_at: str | None = None,
     ) -> None:
         state = self.ensure_pin_watch_state(def_index)
         now = datetime.now(UTC)
@@ -216,6 +219,12 @@ class Storage:
             state.last_alert_listing_id = last_alert_listing_id
         if last_alert_price is not None:
             state.last_alert_price = last_alert_price
+        if last_sale_listing_id is not None:
+            state.last_sale_listing_id = last_sale_listing_id
+        if last_sale_price is not None:
+            state.last_sale_price = last_sale_price
+        if last_sale_sold_at is not None:
+            state.last_sale_sold_at = last_sale_sold_at
         state.updated_at = now
         state.save()
 

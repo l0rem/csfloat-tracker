@@ -8,7 +8,7 @@ import httpx
 
 from csfloat_monitor.currency import PriceFormatter, UsdPriceFormatter
 from csfloat_monitor.market_insights import DelistedMarketAnalyzer
-from csfloat_monitor.types import CHANGE_NEW, CHANGE_PRICE_CHANGED, ChangeSet, PinAlert
+from csfloat_monitor.types import CHANGE_NEW, CHANGE_PRICE_CHANGED, ChangeSet, PinAlert, PinSaleAlert
 
 
 DEFAULT_PRICE_FORMATTER = UsdPriceFormatter()
@@ -318,6 +318,34 @@ class TelegramNotifier:
         self._assert_telegram_ok(payload)
         return payload.get("result", [])
 
+    def send_pin_sale_alert(self, alert: PinSaleAlert) -> dict[str, Any]:
+        caption = self._format_pin_sale_alert_message(alert)
+
+        if alert.image_url:
+            payload = {
+                "chat_id": self._chat_id,
+                "photo": alert.image_url,
+                "caption": caption,
+                "parse_mode": "HTML",
+            }
+            response = self._client.post(self._send_photo_url, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            self._assert_telegram_ok(data)
+            return data
+
+        payload = {
+            "chat_id": self._chat_id,
+            "text": caption,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        response = self._client.post(self._send_message_url, json=payload)
+        response.raise_for_status()
+        data = response.json()
+        self._assert_telegram_ok(data)
+        return data
+
     def answer_callback_query(self, callback_query_id: str, text: str | None = None) -> None:
         payload: dict[str, Any] = {"callback_query_id": callback_query_id}
         if text:
@@ -403,6 +431,28 @@ class TelegramNotifier:
 
         lines.append("")
         lines.append(f"🔗 <a href=\"{html.escape(alert.listing_url)}\">Open on CSFloat</a>")
+        return "\n".join(lines)
+
+    def _format_pin_sale_alert_message(self, alert: PinSaleAlert) -> str:
+        lines = [
+            "🧾 <b>NEW SALE DETECTED</b>",
+            f"🎯 <b>Item:</b> {html.escape(alert.market_hash_name)}",
+            f"🧩 <b>Def Index:</b> <code>{alert.def_index}</code>",
+            f"💶 <b>Sale Price:</b> <code>{html.escape(self._price_formatter.format_price(str(alert.sale_price)))}</code>",
+            (
+                "📈 <b>Vs Lowest Known:</b> "
+                f"<code>+{alert.percent_above_lowest_known:.2f}%</code> "
+                f"(low <code>{html.escape(self._price_formatter.format_price(str(alert.lowest_known_price)))}</code>)"
+            ),
+        ]
+        if alert.sale_listing_id:
+            lines.append(f"🆔 <b>Sale Listing:</b> <code>{html.escape(alert.sale_listing_id)}</code>")
+        if alert.sold_at:
+            sold_at = alert.sold_at.replace("T", " ").replace("Z", " UTC")
+            lines.append(f"🕒 <b>Sold At:</b> {html.escape(sold_at)}")
+        if alert.listing_url:
+            lines.append("")
+            lines.append(f"🔗 <a href=\"{html.escape(alert.listing_url)}\">Open on CSFloat</a>")
         return "\n".join(lines)
 
     @staticmethod

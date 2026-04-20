@@ -66,3 +66,16 @@ class PinAlert:
     cheapest_sale_price: int | None
     percent_below_cheapest_sale: float | None
     recent_sales: list[PinSaleRecord] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class PinSaleAlert:
+    def_index: int
+    market_hash_name: str
+    sale_price: int
+    lowest_known_price: int
+    percent_above_lowest_known: float
+    sold_at: str | None = None
+    sale_listing_id: str | None = None
+    image_url: str | None = None
+    listing_url: str | None = None

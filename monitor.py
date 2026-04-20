@@ -227,9 +227,10 @@ def cmd_run(_: argparse.Namespace) -> int:
                         sales_rows=config.pin_sales_rows,
                     )
                     LOGGER.info(
-                        "pin_watch_poll_complete polled=%d alerts=%d new_low=%d tied_low=%d duplicates=%d above_threshold=%d no_listing=%d no_baseline=%d",
+                        "pin_watch_poll_complete polled=%d alerts=%d sale_alerts=%d new_low=%d tied_low=%d duplicates=%d above_threshold=%d no_listing=%d no_baseline=%d",
                         poll_stats.polled,
                         poll_stats.alerts_sent,
+                        poll_stats.sale_alerts_sent,
                         poll_stats.new_low_alerts,
                         poll_stats.tied_low_alerts,
                         poll_stats.duplicate_skipped,

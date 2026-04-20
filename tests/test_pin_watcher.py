@@ -30,7 +30,11 @@ def make_listing(def_index: int, listing_id: str, price: int, market_hash_name: 
 
 
 class FakeClient:
-    def __init__(self, listings: dict[int, list[ListingRecord]], sales: dict[str, list[PinSaleRecord]]):
+    def __init__(
+        self,
+        listings: dict[int, list[ListingRecord]],
+        sales: dict[str, list[PinSaleRecord] | list[list[PinSaleRecord]]],
+    ):
         self._listings = listings
         self._sales = sales
         self.buy_calls: list[tuple[str, int]] = []
@@ -44,7 +48,10 @@ class FakeClient:
         return values.pop(0)
 
     def fetch_sales_history(self, market_hash_name: str) -> list[PinSaleRecord]:
-        return list(self._sales.get(market_hash_name) or [])
+        values = self._sales.get(market_hash_name) or []
+        if values and isinstance(values[0], list):
+            return list(values.pop(0))
+        return list(values)
 
     def buy_now(self, *, listing_id: str, total_price: int) -> dict:
         self.buy_calls.append((listing_id, total_price))
@@ -54,11 +61,16 @@ class FakeClient:
 class FakeNotifier:
     def __init__(self):
         self.alerts: list[tuple[str, str]] = []
+        self.sale_alerts: list[tuple[int, int, float]] = []
         self._updates: list[dict] = []
         self.actions: list[tuple[str, str]] = []
 
     def send_pin_alert(self, alert, action_id: str):  # noqa: ANN001
         self.alerts.append((alert.trigger_type, action_id))
+        return {"ok": True}
+
+    def send_pin_sale_alert(self, alert):  # noqa: ANN001
+        self.sale_alerts.append((alert.sale_price, alert.lowest_known_price, alert.percent_above_lowest_known))
         return {"ok": True}
 
     def fetch_updates(self, *, offset: int):  # noqa: ARG002
@@ -162,6 +174,40 @@ class PinWatcherTests(unittest.TestCase):
         refreshed_action = self.storage.get_pin_callback_action(action.action_id)
         self.assertIsNotNone(refreshed_action)
         self.assertEqual("bought", refreshed_action.status if refreshed_action else "")
+
+    def test_new_latest_sale_sends_single_sale_alert(self) -> None:
+        def_index = 6104
+        market = "Guardian Pin"
+        listing = make_listing(def_index, "L10", 5000, market_hash_name=market)
+
+        client = FakeClient(
+            listings={def_index: [listing, listing, listing]},
+            sales={
+                market: [
+                    [PinSaleRecord(sale_price=4800, sold_at="2026-04-20T09:00:00Z", listing_id="S1")],
+                    [PinSaleRecord(sale_price=5400, sold_at="2026-04-20T10:00:00Z", listing_id="S2")],
+                    [PinSaleRecord(sale_price=5400, sold_at="2026-04-20T10:00:00Z", listing_id="S2")],
+                ]
+            },
+        )
+        notifier = FakeNotifier()
+
+        bootstrap_pin_states(
+            storage=self.storage,
+            client=client,
+            def_indexes=[def_index],
+            sales_rows=10,
+        )
+        stats_1 = run_pin_watch_poll(storage=self.storage, client=client, notifier=notifier, sales_rows=10)
+        stats_2 = run_pin_watch_poll(storage=self.storage, client=client, notifier=notifier, sales_rows=10)
+
+        self.assertEqual(1, stats_1.sale_alerts_sent)
+        self.assertEqual(0, stats_2.sale_alerts_sent)
+        self.assertEqual(1, len(notifier.sale_alerts))
+        sale_price, lowest_known, premium_pct = notifier.sale_alerts[0]
+        self.assertEqual(5400, sale_price)
+        self.assertEqual(4800, lowest_known)
+        self.assertAlmostEqual(12.5, premium_pct, places=2)
 
 
 if __name__ == "__main__":

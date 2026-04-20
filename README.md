@@ -4,6 +4,7 @@ Local Python monitor for CSFloat profile pins with:
 - Persistent per-pin best-known pricing state across restarts
 - Startup bootstrap from live lowest listing + recent sales history
 - Telegram alerts only for `new low` / `tied low` events
+- Telegram alerts for newly detected latest sales on watched pins
 - Photo-first alerts (screenshot/icon) with last 10 sales in the message
 - Inline buy flow: `Buy` -> `Confirm? (Yes/No)` -> API purchase attempt
 - Automatic pin completion (stop watching) after successful purchase
@@ -42,7 +43,7 @@ The script will:
 1. Auto-run unattended migrations.
 2. Bootstrap configured pins from live listings and sales history.
 3. Poll every 30 seconds (or `POLL_INTERVAL_SECONDS`) for lowest listing changes.
-4. Send Telegram alerts only when a listing hits a new/tied best-known price.
+4. Send Telegram alerts when a listing hits a new/tied best-known price and when a new latest sale is detected.
 5. Handle inline callback actions to confirm/cancel purchases.
 6. Persist pin state, callback offsets, and callback action idempotency.
 

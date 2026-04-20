@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from csfloat_monitor.csfloat_client import CSFloatClient
 from csfloat_monitor.storage import Storage
 from csfloat_monitor.telegram_notifier import TelegramNotifier
-from csfloat_monitor.types import ListingRecord, PinAlert, PinSaleRecord
+from csfloat_monitor.types import ListingRecord, PinAlert, PinSaleAlert, PinSaleRecord
 
 
 LOGGER = logging.getLogger("csfloat.pin_watcher")
@@ -25,6 +25,7 @@ class PinWatcherStats:
     above_threshold: int = 0
     tied_low_alerts: int = 0
     new_low_alerts: int = 0
+    sale_alerts_sent: int = 0
 
 
 @dataclass(slots=True)
@@ -65,12 +66,17 @@ def bootstrap_pin_states(
         if recent_sales:
             storage.replace_recent_sales(def_index, market_hash_name, recent_sales)
             cheapest_sale = min(s.sale_price for s in recent_sales)
+            latest_sale = recent_sales[0]
             stats.sales_loaded += 1
         else:
             cheapest_sale = None
+            latest_sale = None
             stats.sales_missing += 1
 
         best_known = _min_compact([listing.price, cheapest_sale])
+        last_sale_listing_id = str(latest_sale.listing_id) if latest_sale and latest_sale.listing_id else None
+        last_sale_sold_at = latest_sale.sold_at if latest_sale else None
+        last_sale_price = latest_sale.sale_price if latest_sale else None
         storage.update_pin_watch_state(
             def_index,
             market_hash_name=market_hash_name,
@@ -80,6 +86,10 @@ def bootstrap_pin_states(
             # seed dedupe at startup to avoid immediate tie alerts after restart
             last_alert_listing_id=listing.listing_id,
             last_alert_price=listing.price,
+            # seed latest sale marker to avoid immediate sale alerts after restart
+            last_sale_listing_id=last_sale_listing_id,
+            last_sale_price=last_sale_price,
+            last_sale_sold_at=last_sale_sold_at,
         )
         stats.initialized += 1
         LOGGER.info(
@@ -123,17 +133,61 @@ def run_pin_watch_poll(
             LOGGER.warning("poll_no_listing def_index=%s", def_index)
             continue
 
+        market_hash_name = listing.market_hash_name or state.market_hash_name or f"def_index:{def_index}"
+        sales = client.fetch_sales_history(market_hash_name)
+        recent_sales = sales[: max(1, sales_rows)]
+        cheapest_sale = min((sale.sale_price for sale in recent_sales), default=None)
+        latest_sale = recent_sales[0] if recent_sales else None
+        has_new_latest_sale = _is_new_latest_sale(
+            last_sale_listing_id=state.last_sale_listing_id,
+            last_sale_price=state.last_sale_price,
+            last_sale_sold_at=state.last_sale_sold_at,
+            latest_sale=latest_sale,
+        )
+
+        if recent_sales:
+            storage.replace_recent_sales(def_index, market_hash_name, recent_sales)
+
         prior_best_known = state.best_known_price
         storage.update_pin_watch_state(
             def_index,
-            market_hash_name=listing.market_hash_name or state.market_hash_name,
+            market_hash_name=market_hash_name,
             best_listing_price=listing.price,
-            best_known_price=listing.price,
+            best_sale_price=cheapest_sale,
+            best_known_price=_min_compact([listing.price, cheapest_sale]),
         )
         refreshed_state = storage.get_pin_watch_state(def_index)
         if refreshed_state is None:
             LOGGER.warning("poll_state_missing_after_update def_index=%s", def_index)
             continue
+        if has_new_latest_sale and latest_sale and refreshed_state.best_known_price:
+            sale_alert = PinSaleAlert(
+                def_index=def_index,
+                market_hash_name=market_hash_name,
+                sale_price=latest_sale.sale_price,
+                lowest_known_price=refreshed_state.best_known_price,
+                percent_above_lowest_known=_percent_above(refreshed_state.best_known_price, latest_sale.sale_price),
+                sold_at=latest_sale.sold_at,
+                sale_listing_id=latest_sale.listing_id,
+                image_url=listing.image_url or listing.screenshot_url,
+                listing_url=listing.listing_url,
+            )
+            notifier.send_pin_sale_alert(sale_alert)
+            stats.sale_alerts_sent += 1
+            storage.update_pin_watch_state(
+                def_index,
+                last_sale_listing_id=str(latest_sale.listing_id) if latest_sale.listing_id else "",
+                last_sale_price=latest_sale.sale_price,
+                last_sale_sold_at=latest_sale.sold_at or "",
+            )
+            LOGGER.info(
+                "pin_sale_alert_sent def_index=%s sale_listing_id=%s sale_price=%s lowest_known=%s pct_above=%.2f",
+                def_index,
+                latest_sale.listing_id,
+                latest_sale.sale_price,
+                refreshed_state.best_known_price,
+                sale_alert.percent_above_lowest_known,
+            )
         best_known_price = prior_best_known if prior_best_known is not None else refreshed_state.best_known_price
         if best_known_price is None:
             stats.no_baseline += 1
@@ -204,10 +258,11 @@ def run_pin_watch_poll(
         )
     duration = time.monotonic() - started
     LOGGER.info(
-        "pin_watch_poll_stats duration_s=%.2f polled=%d alerts=%d new_low=%d tied_low=%d above_threshold=%d duplicate_skipped=%d no_listing=%d no_baseline=%d",
+        "pin_watch_poll_stats duration_s=%.2f polled=%d alerts=%d sale_alerts=%d new_low=%d tied_low=%d above_threshold=%d duplicate_skipped=%d no_listing=%d no_baseline=%d",
         duration,
         stats.polled,
         stats.alerts_sent,
+        stats.sale_alerts_sent,
         stats.new_low_alerts,
         stats.tied_low_alerts,
         stats.above_threshold,
@@ -393,6 +448,28 @@ def _percent_below(cheapest_sale_price: int | None, current_price: int) -> float
     if cheapest_sale_price is None or cheapest_sale_price <= 0:
         return None
     return ((cheapest_sale_price - current_price) / cheapest_sale_price) * 100.0
+
+
+def _percent_above(lowest_price: int, current_price: int) -> float:
+    if lowest_price <= 0:
+        return 0.0
+    return ((current_price - lowest_price) / lowest_price) * 100.0
+
+
+def _is_new_latest_sale(
+    *,
+    last_sale_listing_id: str | None,
+    last_sale_price: int | None,
+    last_sale_sold_at: str | None,
+    latest_sale: PinSaleRecord | None,
+) -> bool:
+    if latest_sale is None:
+        return False
+    return (
+        (last_sale_listing_id or "") != (latest_sale.listing_id or "")
+        or int(last_sale_price or -1) != int(latest_sale.sale_price)
+        or (last_sale_sold_at or "") != (latest_sale.sold_at or "")
+    )
 
 
 def _min_compact(values: list[int | None]) -> int | None:
