@@ -81,14 +81,12 @@ class CSFloatClient:
         return records
 
     def fetch_lowest_listing(self, def_index: int) -> ListingRecord | None:
-        url = self._build_listings_url_for_def_index(def_index)
         self._log.info("fetch_lowest_listing_start def_index=%s", def_index)
-        payload = self._request_json(url)
-        rows = payload.get("data", [])
-        if not rows:
+        listings = self.fetch_cheapest_listings(def_index, limit=1)
+        if not listings:
             self._log.warning("fetch_lowest_listing_empty def_index=%s", def_index)
             return None
-        record = self._normalize_listing(rows[0])
+        record = listings[0]
         self._log.info(
             "fetch_lowest_listing_success def_index=%s listing_id=%s price=%s market_hash_name=%s",
             def_index,
@@ -97,6 +95,28 @@ class CSFloatClient:
             record.market_hash_name,
         )
         return record
+
+    def fetch_cheapest_listings(self, def_index: int, *, limit: int) -> list[ListingRecord]:
+        normalized_limit = max(1, int(limit))
+        url = self._build_listings_url_for_def_index(def_index, limit=normalized_limit)
+        self._log.info(
+            "fetch_cheapest_listings_start def_index=%s limit=%s",
+            def_index,
+            normalized_limit,
+        )
+        payload = self._request_json(url)
+        rows = payload.get("data", [])
+        if not rows:
+            self._log.warning("fetch_cheapest_listings_empty def_index=%s limit=%s", def_index, normalized_limit)
+            return []
+        listings = [self._normalize_listing(row) for row in rows]
+        self._log.info(
+            "fetch_cheapest_listings_success def_index=%s limit=%s rows=%d",
+            def_index,
+            normalized_limit,
+            len(listings),
+        )
+        return listings
 
     def fetch_sales_history(self, market_hash_name: str) -> list[PinSaleRecord]:
         encoded_name = quote(market_hash_name, safe="")
@@ -122,6 +142,7 @@ class CSFloatClient:
                     listing_id=str(row.get("id")) if row.get("id") is not None else None,
                 )
             )
+        sales = self._sort_sales_descending(sales)
         self._log.info("fetch_sales_history_success market_hash_name=%s rows=%d", market_hash_name, len(sales))
         return sales
 
@@ -212,8 +233,11 @@ class CSFloatClient:
         )
 
     @staticmethod
-    def _build_listings_url_for_def_index(def_index: int) -> str:
-        return f"https://csfloat.com/api/v1/listings?limit=1&sort_by=lowest_price&def_index={int(def_index)}"
+    def _build_listings_url_for_def_index(def_index: int, *, limit: int = 1) -> str:
+        return (
+            "https://csfloat.com/api/v1/listings"
+            f"?limit={max(1, int(limit))}&sort_by=lowest_price&def_index={int(def_index)}"
+        )
 
     def _compute_retry_delay(self, attempt: int, response: httpx.Response | None) -> float:
         # Honor Retry-After for explicit server-side throttling.
@@ -320,3 +344,36 @@ class CSFloatClient:
             params.pop("cursor", None)
 
         return urlunsplit((split.scheme, split.netloc, split.path, urlencode(params), split.fragment))
+
+    @staticmethod
+    def _sort_sales_descending(sales: list[PinSaleRecord]) -> list[PinSaleRecord]:
+        # CSFloat history payloads are expected newest-first, but we normalize here
+        # to avoid stale "latest sale" alerts if API ordering drifts.
+        with_index = list(enumerate(sales))
+        with_index.sort(
+            key=lambda pair: CSFloatClient._sale_sort_key(pair[1], pair[0]),
+            reverse=True,
+        )
+        return [sale for _, sale in with_index]
+
+    @staticmethod
+    def _sale_sort_key(sale: PinSaleRecord, idx: int) -> tuple[int, datetime, int]:
+        sold_at_dt = CSFloatClient._parse_iso8601_utc(sale.sold_at)
+        if sold_at_dt is None:
+            return (0, datetime.min.replace(tzinfo=UTC), -idx)
+        return (1, sold_at_dt, -idx)
+
+    @staticmethod
+    def _parse_iso8601_utc(raw: str | None) -> datetime | None:
+        if not raw:
+            return None
+        value = str(raw).strip()
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=UTC)
+        return parsed.astimezone(UTC)

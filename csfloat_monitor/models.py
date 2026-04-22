@@ -130,6 +130,33 @@ class PinRecentSale(BaseModel):
         table_name = "pin_recent_sales"
 
 
+class PinTrackedListing(BaseModel):
+    id = AutoField()
+    def_index = IntegerField(index=True)
+    rank = IntegerField(default=0)
+    listing_id = CharField(index=True)
+    listing_url = TextField()
+    price = IntegerField(null=True)
+    state = CharField(null=True)
+    market_hash_name = TextField(null=True)
+    item_name = TextField(null=True)
+    wear_name = TextField(null=True)
+    float_value = DoubleField(null=True)
+    created_at = TextField(null=True)
+    screenshot_url = TextField(null=True)
+    image_url = TextField(null=True)
+    inspect_link = TextField(null=True)
+    seller_description = TextField(null=True)
+    raw_json = TextField()
+    recorded_at = DateTimeField(default=utc_now)
+
+    class Meta:
+        table_name = "pin_tracked_listings"
+        indexes = (
+            (("def_index", "listing_id"), True),
+        )
+
+
 class PinCallbackAction(BaseModel):
     action_id = CharField(primary_key=True)
     def_index = IntegerField(index=True)
@@ -282,6 +309,7 @@ def run_unattended_migrations() -> None:
                 Setting,
                 PinWatchState,
                 PinRecentSale,
+                PinTrackedListing,
                 PinCallbackAction,
             ],
             safe=True,
@@ -299,6 +327,7 @@ def run_unattended_migrations() -> None:
                     Setting,
                     PinWatchState,
                     PinRecentSale,
+                    PinTrackedListing,
                     PinCallbackAction,
                 ],
                 safe=True,

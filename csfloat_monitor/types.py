@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 CHANGE_NEW = "new"
 CHANGE_PRICE_CHANGED = "price_changed"
 CHANGE_DELISTED = "delisted"
+CHANGE_TRACKED_REMOVED = "tracked_removed"
 
 
 @dataclass(slots=True)

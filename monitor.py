@@ -112,7 +112,9 @@ def cmd_run(_: argparse.Namespace) -> int:
     LOGGER.info(
         "startup_config db=%s proxy=%s listings_url=%s poll_interval=%ss http_max_retries=%d http_429_retries=%d "
         "http_backoff=%.2fs market_avg_cache_ttl=%ss market_avg_min_samples=%d "
-        "http_max_backoff=%.2fs http_page_delay=%.2fs display_currency=%s pin_def_indexes=%s pin_sales_rows=%d",
+        "http_max_backoff=%.2fs http_page_delay=%.2fs display_currency=%s pin_def_indexes=%s pin_sales_rows=%d "
+        "pin_tracked_limit=%d "
+        "sale_alert_max_age_s=%s",
         config.redacted_database_target(),
         config.redacted_proxy_target(),
         config.csfloat_listings_url,
@@ -127,6 +129,8 @@ def cmd_run(_: argparse.Namespace) -> int:
         config.display_currency,
         config.pin_target_def_indexes,
         config.pin_sales_rows,
+        config.pin_tracked_listings_limit,
+        config.sale_alert_max_age_seconds,
     )
     storage = Storage(config.database_url)
     storage.run_migrations()
@@ -179,6 +183,7 @@ def cmd_run(_: argparse.Namespace) -> int:
                 client=csfloat_client,
                 def_indexes=config.pin_target_def_indexes,
                 sales_rows=config.pin_sales_rows,
+                tracked_listings_limit=config.pin_tracked_listings_limit,
             )
             LOGGER.info(
                 "startup_phase_complete phase=bootstrap requested=%d initialized=%d no_listing=%d sales_loaded=%d sales_missing=%d",
@@ -225,13 +230,19 @@ def cmd_run(_: argparse.Namespace) -> int:
                         client=csfloat_client,
                         notifier=notifier,
                         sales_rows=config.pin_sales_rows,
+                        tracked_listings_limit=config.pin_tracked_listings_limit,
+                        sale_alert_max_age_seconds=config.sale_alert_max_age_seconds,
                     )
                     LOGGER.info(
-                        "pin_watch_poll_complete polled=%d alerts=%d sale_alerts=%d cheaper_listing_alerts=%d above_threshold=%d no_listing=%d no_baseline=%d",
+                        "pin_watch_poll_complete polled=%d alerts=%d sale_alerts=%d cheaper_listing_alerts=%d tracked_events=%d tracked_new=%d tracked_price_changed=%d tracked_removed=%d above_threshold=%d no_listing=%d no_baseline=%d",
                         poll_stats.polled,
                         poll_stats.alerts_sent,
                         poll_stats.sale_alerts_sent,
                         poll_stats.cheaper_listing_alerts,
+                        poll_stats.tracked_listing_events_sent,
+                        poll_stats.tracked_new_events,
+                        poll_stats.tracked_price_changed_events,
+                        poll_stats.tracked_removed_events,
                         poll_stats.above_threshold,
                         poll_stats.no_listing,
                         poll_stats.no_baseline,

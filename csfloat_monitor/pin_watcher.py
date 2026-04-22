@@ -3,11 +3,22 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 from csfloat_monitor.csfloat_client import CSFloatClient
 from csfloat_monitor.storage import Storage
 from csfloat_monitor.telegram_notifier import TelegramNotifier
-from csfloat_monitor.types import PinAlert, PinSaleAlert, PinSaleRecord
+from csfloat_monitor.types import (
+    CHANGE_NEW,
+    CHANGE_PRICE_CHANGED,
+    CHANGE_TRACKED_REMOVED,
+    ChangeSet,
+    FieldDelta,
+    ListingRecord,
+    PinAlert,
+    PinSaleAlert,
+    PinSaleRecord,
+)
 
 
 LOGGER = logging.getLogger("csfloat.pin_watcher")
@@ -24,6 +35,10 @@ class PinWatcherStats:
     above_threshold: int = 0
     cheaper_listing_alerts: int = 0
     sale_alerts_sent: int = 0
+    tracked_listing_events_sent: int = 0
+    tracked_new_events: int = 0
+    tracked_price_changed_events: int = 0
+    tracked_removed_events: int = 0
 
 
 @dataclass(slots=True)
@@ -41,18 +56,22 @@ def bootstrap_pin_states(
     client: CSFloatClient,
     def_indexes: list[int],
     sales_rows: int,
+    tracked_listings_limit: int = 5,
 ) -> BootstrapStats:
     started = time.monotonic()
     stats = BootstrapStats(requested=len(def_indexes))
     LOGGER.info(
-        "bootstrap_start pins_requested=%d sales_rows=%d",
+        "bootstrap_start pins_requested=%d sales_rows=%d tracked_limit=%d",
         len(def_indexes),
         sales_rows,
+        max(1, tracked_listings_limit),
     )
     for def_index in def_indexes:
         storage.ensure_pin_watch_state(def_index)
         LOGGER.info("bootstrap_pin_fetch_start def_index=%s", def_index)
-        listing = client.fetch_lowest_listing(def_index)
+        tracked_listings = client.fetch_cheapest_listings(def_index, limit=max(1, tracked_listings_limit))
+        storage.replace_pin_tracked_snapshot(def_index, tracked_listings)
+        listing = tracked_listings[0] if tracked_listings else None
         if listing is None or listing.price is None:
             stats.no_listing += 1
             LOGGER.warning("bootstrap_no_listing def_index=%s", def_index)
@@ -121,16 +140,51 @@ def run_pin_watch_poll(
     client: CSFloatClient,
     notifier: TelegramNotifier,
     sales_rows: int,
+    tracked_listings_limit: int = 5,
+    sale_alert_max_age_seconds: int | None = 3600,
 ) -> PinWatcherStats:
     started = time.monotonic()
     stats = PinWatcherStats()
+    tracked_limit = max(1, tracked_listings_limit)
     for state in storage.list_active_pin_states():
         stats.polled += 1
         def_index = int(state.def_index)
-        listing = client.fetch_lowest_listing(def_index)
+        previous_snapshot, previous_ranks = storage.get_pin_tracked_snapshot_with_ranks(def_index)
+        tracked_listings = client.fetch_cheapest_listings(def_index, limit=tracked_limit)
+        storage.replace_pin_tracked_snapshot(def_index, tracked_listings)
+        current_snapshot = {row.listing_id: row for row in tracked_listings}
+        current_ranks = {row.listing_id: idx for idx, row in enumerate(tracked_listings, start=1)}
+        tracked_changes = _diff_tracked_listings(previous_snapshot, current_snapshot)
+        for change in tracked_changes:
+            try:
+                notifier.send_pin_listing_change(
+                    change,
+                    def_index=def_index,
+                    tracked_limit=tracked_limit,
+                    current_rank=current_ranks.get(change.listing_id),
+                    previous_rank=previous_ranks.get(change.listing_id),
+                )
+                stats.alerts_sent += 1
+                stats.tracked_listing_events_sent += 1
+                if change.change_type == CHANGE_NEW:
+                    stats.tracked_new_events += 1
+                elif change.change_type == CHANGE_PRICE_CHANGED:
+                    stats.tracked_price_changed_events += 1
+                elif change.change_type == CHANGE_TRACKED_REMOVED:
+                    stats.tracked_removed_events += 1
+            except Exception as exc:  # noqa: BLE001
+                LOGGER.exception(
+                    "pin_tracked_change_notify_failed def_index=%s listing_id=%s change_type=%s error=%s",
+                    def_index,
+                    change.listing_id,
+                    change.change_type,
+                    exc,
+                )
+
+        listing = tracked_listings[0] if tracked_listings else None
         if listing is None or listing.price is None:
             stats.no_listing += 1
-            LOGGER.warning("poll_no_listing def_index=%s", def_index)
+            LOGGER.warning("poll_no_listing def_index=%s tracked_limit=%d", def_index, tracked_limit)
             continue
 
         market_hash_name = listing.market_hash_name or state.market_hash_name or f"def_index:{def_index}"
@@ -162,34 +216,49 @@ def run_pin_watch_poll(
         if refreshed_state is None:
             LOGGER.warning("poll_state_missing_after_update def_index=%s", def_index)
             continue
-        if has_new_latest_sale and latest_sale and refreshed_state.best_known_price:
-            sale_alert = PinSaleAlert(
-                def_index=def_index,
-                market_hash_name=market_hash_name,
-                sale_price=latest_sale.sale_price,
-                lowest_known_price=refreshed_state.best_known_price,
-                percent_above_lowest_known=_percent_above(refreshed_state.best_known_price, latest_sale.sale_price),
-                sold_at=latest_sale.sold_at,
-                sale_listing_id=latest_sale.listing_id,
-                image_url=listing.image_url or listing.screenshot_url,
-                listing_url=listing.listing_url,
-            )
-            notifier.send_pin_sale_alert(sale_alert)
-            stats.sale_alerts_sent += 1
+
+        if has_new_latest_sale and latest_sale:
+            # Always persist the latest sale marker once observed, even if we skip
+            # notification (for stale/backfilled sales), so we don't repeat alerts.
             storage.update_pin_watch_state(
                 def_index,
                 last_sale_listing_id=str(latest_sale.listing_id) if latest_sale.listing_id else "",
                 last_sale_price=latest_sale.sale_price,
                 last_sale_sold_at=latest_sale.sold_at or "",
             )
-            LOGGER.info(
-                "pin_sale_alert_sent def_index=%s sale_listing_id=%s sale_price=%s lowest_known=%s pct_above=%.2f",
-                def_index,
-                latest_sale.listing_id,
-                latest_sale.sale_price,
-                refreshed_state.best_known_price,
-                sale_alert.percent_above_lowest_known,
-            )
+            if refreshed_state.best_known_price and _should_send_sale_alert(
+                sold_at=latest_sale.sold_at,
+                sale_alert_max_age_seconds=sale_alert_max_age_seconds,
+            ):
+                sale_alert = PinSaleAlert(
+                    def_index=def_index,
+                    market_hash_name=market_hash_name,
+                    sale_price=latest_sale.sale_price,
+                    lowest_known_price=refreshed_state.best_known_price,
+                    percent_above_lowest_known=_percent_above(refreshed_state.best_known_price, latest_sale.sale_price),
+                    sold_at=latest_sale.sold_at,
+                    sale_listing_id=latest_sale.listing_id,
+                    image_url=listing.image_url or listing.screenshot_url,
+                    listing_url=listing.listing_url,
+                )
+                notifier.send_pin_sale_alert(sale_alert)
+                stats.sale_alerts_sent += 1
+                LOGGER.info(
+                    "pin_sale_alert_sent def_index=%s sale_listing_id=%s sale_price=%s lowest_known=%s pct_above=%.2f",
+                    def_index,
+                    latest_sale.listing_id,
+                    latest_sale.sale_price,
+                    refreshed_state.best_known_price,
+                    sale_alert.percent_above_lowest_known,
+                )
+            else:
+                LOGGER.info(
+                    "pin_sale_alert_skipped_stale def_index=%s sale_listing_id=%s sold_at=%s max_age_s=%s",
+                    def_index,
+                    latest_sale.listing_id,
+                    latest_sale.sold_at,
+                    sale_alert_max_age_seconds,
+                )
 
         if previous_lowest_price is None:
             stats.no_baseline += 1
@@ -259,12 +328,16 @@ def run_pin_watch_poll(
         )
     duration = time.monotonic() - started
     LOGGER.info(
-        "pin_watch_poll_stats duration_s=%.2f polled=%d alerts=%d sale_alerts=%d cheaper_listing_alerts=%d above_threshold=%d no_listing=%d no_baseline=%d",
+        "pin_watch_poll_stats duration_s=%.2f polled=%d alerts=%d sale_alerts=%d cheaper_listing_alerts=%d tracked_events=%d tracked_new=%d tracked_price_changed=%d tracked_removed=%d above_threshold=%d no_listing=%d no_baseline=%d",
         duration,
         stats.polled,
         stats.alerts_sent,
         stats.sale_alerts_sent,
         stats.cheaper_listing_alerts,
+        stats.tracked_listing_events_sent,
+        stats.tracked_new_events,
+        stats.tracked_price_changed_events,
+        stats.tracked_removed_events,
         stats.above_threshold,
         stats.no_listing,
         stats.no_baseline,
@@ -457,6 +530,128 @@ def _is_new_latest_sale(
         or int(last_sale_price or -1) != int(latest_sale.sale_price)
         or (last_sale_sold_at or "") != (latest_sale.sold_at or "")
     )
+
+
+def _diff_tracked_listings(
+    previous: dict[str, ListingRecord],
+    current: dict[str, ListingRecord],
+) -> list[ChangeSet]:
+    changes: list[ChangeSet] = []
+
+    previous_ids = set(previous)
+    current_ids = set(current)
+
+    new_ids = sorted(current_ids - previous_ids)
+    for listing_id in new_ids:
+        listing = current[listing_id]
+        deltas = [
+            FieldDelta("price", "n/a", _as_text(listing.price)),
+            FieldDelta("state", "n/a", _as_text(listing.state)),
+        ]
+        if listing.market_hash_name:
+            deltas.append(FieldDelta("market_hash_name", "n/a", listing.market_hash_name))
+        if listing.float_value is not None:
+            deltas.append(FieldDelta("float_value", "n/a", _as_text(listing.float_value)))
+        changes.append(
+            ChangeSet(
+                listing_id=listing_id,
+                change_type=CHANGE_NEW,
+                listing_url=listing.listing_url,
+                market_hash_name=listing.market_hash_name,
+                float_value=listing.float_value,
+                seller_description=listing.seller_description,
+                deltas=deltas,
+                screenshot_url=listing.screenshot_url,
+                image_url=listing.image_url or listing.screenshot_url,
+                inspect_link=listing.inspect_link,
+            )
+        )
+
+    shared_ids = sorted(current_ids & previous_ids)
+    for listing_id in shared_ids:
+        old_listing = previous[listing_id]
+        new_listing = current[listing_id]
+        deltas: list[FieldDelta] = []
+        if old_listing.price != new_listing.price:
+            deltas.append(FieldDelta("price", _as_text(old_listing.price), _as_text(new_listing.price)))
+        if deltas:
+            changes.append(
+                ChangeSet(
+                    listing_id=listing_id,
+                    change_type=CHANGE_PRICE_CHANGED,
+                    listing_url=new_listing.listing_url,
+                    market_hash_name=new_listing.market_hash_name,
+                    float_value=new_listing.float_value,
+                    seller_description=new_listing.seller_description,
+                    deltas=deltas,
+                    screenshot_url=new_listing.screenshot_url,
+                    image_url=new_listing.image_url or new_listing.screenshot_url,
+                    inspect_link=new_listing.inspect_link,
+                )
+            )
+
+    removed_ids = sorted(previous_ids - current_ids)
+    for listing_id in removed_ids:
+        old_listing = previous[listing_id]
+        deltas = [
+            FieldDelta("state", _as_text(old_listing.state), "outside_top_window"),
+            FieldDelta("price", _as_text(old_listing.price), "n/a"),
+        ]
+        if old_listing.market_hash_name:
+            deltas.append(FieldDelta("market_hash_name", old_listing.market_hash_name, "n/a"))
+        changes.append(
+            ChangeSet(
+                listing_id=listing_id,
+                change_type=CHANGE_TRACKED_REMOVED,
+                listing_url=old_listing.listing_url,
+                market_hash_name=old_listing.market_hash_name,
+                float_value=old_listing.float_value,
+                seller_description=old_listing.seller_description,
+                deltas=deltas,
+                screenshot_url=old_listing.screenshot_url,
+                image_url=old_listing.image_url or old_listing.screenshot_url,
+                inspect_link=old_listing.inspect_link,
+            )
+        )
+
+    return changes
+
+
+def _should_send_sale_alert(
+    *,
+    sold_at: str | None,
+    sale_alert_max_age_seconds: int | None,
+) -> bool:
+    if sale_alert_max_age_seconds is None or sale_alert_max_age_seconds <= 0:
+        return True
+    sold_at_dt = _parse_iso8601_utc(sold_at)
+    if sold_at_dt is None:
+        # Keep alerting when timestamp is missing/unparseable instead of dropping
+        # potentially valid fresh sales.
+        return True
+    age_seconds = (datetime.now(UTC) - sold_at_dt).total_seconds()
+    return age_seconds <= float(sale_alert_max_age_seconds)
+
+
+def _as_text(value: object | None) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def _parse_iso8601_utc(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    value = str(raw).strip()
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=UTC)
+    return parsed.astimezone(UTC)
 
 
 def _min_compact(values: list[int | None]) -> int | None:

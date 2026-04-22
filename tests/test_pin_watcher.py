@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from csfloat_monitor.pin_watcher import (
@@ -10,7 +11,7 @@ from csfloat_monitor.pin_watcher import (
     run_pin_watch_poll,
 )
 from csfloat_monitor.storage import Storage
-from csfloat_monitor.types import ListingRecord, PinSaleRecord
+from csfloat_monitor.types import CHANGE_NEW, CHANGE_PRICE_CHANGED, CHANGE_TRACKED_REMOVED, ListingRecord, PinSaleRecord
 
 
 def make_listing(def_index: int, listing_id: str, price: int, market_hash_name: str = "Pin Item") -> ListingRecord:
@@ -40,12 +41,20 @@ class FakeClient:
         self.buy_calls: list[tuple[str, int]] = []
 
     def fetch_lowest_listing(self, def_index: int) -> ListingRecord | None:
+        rows = self.fetch_cheapest_listings(def_index, limit=1)
+        if not rows:
+            return None
+        return rows[0]
+
+    def fetch_cheapest_listings(self, def_index: int, *, limit: int) -> list[ListingRecord]:
         values = self._listings.get(def_index) or []
         if not values:
-            return None
+            return []
+        if values and isinstance(values[0], list):
+            return list(values.pop(0))[: max(1, limit)]
         if len(values) == 1:
-            return values[0]
-        return values.pop(0)
+            return [values[0]]
+        return [values.pop(0)]
 
     def fetch_sales_history(self, market_hash_name: str) -> list[PinSaleRecord]:
         values = self._sales.get(market_hash_name) or []
@@ -62,6 +71,7 @@ class FakeNotifier:
     def __init__(self):
         self.alerts: list[tuple[str, int, int, int, float, str]] = []
         self.sale_alerts: list[tuple[int, int, float]] = []
+        self.tracked_changes: list[tuple[str, str, int, int | None, int | None]] = []
         self._updates: list[dict] = []
         self.actions: list[tuple[str, str]] = []
 
@@ -80,6 +90,18 @@ class FakeNotifier:
 
     def send_pin_sale_alert(self, alert):  # noqa: ANN001
         self.sale_alerts.append((alert.sale_price, alert.lowest_known_price, alert.percent_above_lowest_known))
+        return {"ok": True}
+
+    def send_pin_listing_change(
+        self,
+        change,  # noqa: ANN001
+        *,
+        def_index: int,
+        tracked_limit: int,
+        current_rank: int | None = None,
+        previous_rank: int | None = None,
+    ):
+        self.tracked_changes.append((change.change_type, change.listing_id, def_index, current_rank, previous_rank))
         return {"ok": True}
 
     def fetch_updates(self, *, offset: int):  # noqa: ARG002
@@ -140,9 +162,9 @@ class PinWatcherTests(unittest.TestCase):
         stats_2 = run_pin_watch_poll(storage=self.storage, client=client, notifier=notifier, sales_rows=10)
         stats_3 = run_pin_watch_poll(storage=self.storage, client=client, notifier=notifier, sales_rows=10)
 
-        self.assertEqual(1, stats_1.alerts_sent)
-        self.assertEqual(0, stats_2.alerts_sent)  # unchanged cheapest
-        self.assertEqual(1, stats_3.alerts_sent)  # cheaper listing replaced previous cheapest
+        self.assertEqual(1, stats_1.cheaper_listing_alerts)
+        self.assertEqual(0, stats_2.cheaper_listing_alerts)  # unchanged cheapest
+        self.assertEqual(1, stats_3.cheaper_listing_alerts)  # cheaper listing replaced previous cheapest
         self.assertEqual(2, len(notifier.alerts))
         self.assertEqual(
             ["new_cheapest_current", "new_cheapest_current"],
@@ -156,6 +178,15 @@ class PinWatcherTests(unittest.TestCase):
         self.assertEqual(4700, notifier.alerts[1][2])
         self.assertEqual(100, notifier.alerts[1][3])
         self.assertAlmostEqual(2.083333, notifier.alerts[1][4], places=4)
+        self.assertEqual(
+            [
+                (CHANGE_NEW, "L2", def_index, 1, None),
+                (CHANGE_TRACKED_REMOVED, "L1", def_index, None, 1),
+                (CHANGE_NEW, "L4", def_index, 1, None),
+                (CHANGE_TRACKED_REMOVED, "L2", def_index, None, 1),
+            ],
+            notifier.tracked_changes,
+        )
 
     def test_confirm_yes_purchases_and_completes_pin(self) -> None:
         def_index = 6102
@@ -200,14 +231,17 @@ class PinWatcherTests(unittest.TestCase):
         def_index = 6104
         market = "Guardian Pin"
         listing = make_listing(def_index, "L10", 5000, market_hash_name=market)
+        now = datetime.now(UTC)
+        t1 = (now - timedelta(minutes=8)).isoformat().replace("+00:00", "Z")
+        t2 = (now - timedelta(minutes=4)).isoformat().replace("+00:00", "Z")
 
         client = FakeClient(
             listings={def_index: [listing, listing, listing]},
             sales={
                 market: [
-                    [PinSaleRecord(sale_price=4800, sold_at="2026-04-20T09:00:00Z", listing_id="S1")],
-                    [PinSaleRecord(sale_price=5400, sold_at="2026-04-20T10:00:00Z", listing_id="S2")],
-                    [PinSaleRecord(sale_price=5400, sold_at="2026-04-20T10:00:00Z", listing_id="S2")],
+                    [PinSaleRecord(sale_price=4800, sold_at=t1, listing_id="S1")],
+                    [PinSaleRecord(sale_price=5400, sold_at=t2, listing_id="S2")],
+                    [PinSaleRecord(sale_price=5400, sold_at=t2, listing_id="S2")],
                 ]
             },
         )
@@ -229,6 +263,103 @@ class PinWatcherTests(unittest.TestCase):
         self.assertEqual(5400, sale_price)
         self.assertEqual(4800, lowest_known)
         self.assertAlmostEqual(12.5, premium_pct, places=2)
+
+    def test_stale_latest_sale_is_deduped_without_alert(self) -> None:
+        def_index = 6105
+        market = "Guardian Pin"
+        listing = make_listing(def_index, "L11", 5000, market_hash_name=market)
+        now = datetime.now(UTC)
+        t_bootstrap = (now - timedelta(hours=5)).isoformat().replace("+00:00", "Z")
+        t_stale = (now - timedelta(hours=3)).isoformat().replace("+00:00", "Z")
+
+        client = FakeClient(
+            listings={def_index: [listing, listing, listing]},
+            sales={
+                market: [
+                    [PinSaleRecord(sale_price=4900, sold_at=t_bootstrap, listing_id="S1")],
+                    [PinSaleRecord(sale_price=4700, sold_at=t_stale, listing_id="S2")],
+                    [PinSaleRecord(sale_price=4700, sold_at=t_stale, listing_id="S2")],
+                ]
+            },
+        )
+        notifier = FakeNotifier()
+
+        bootstrap_pin_states(
+            storage=self.storage,
+            client=client,
+            def_indexes=[def_index],
+            sales_rows=10,
+        )
+        stats_1 = run_pin_watch_poll(
+            storage=self.storage,
+            client=client,
+            notifier=notifier,
+            sales_rows=10,
+            sale_alert_max_age_seconds=3600,
+        )
+        stats_2 = run_pin_watch_poll(
+            storage=self.storage,
+            client=client,
+            notifier=notifier,
+            sales_rows=10,
+            sale_alert_max_age_seconds=3600,
+        )
+
+        self.assertEqual(0, stats_1.sale_alerts_sent)
+        self.assertEqual(0, stats_2.sale_alerts_sent)
+        self.assertEqual([], notifier.sale_alerts)
+        state = self.storage.get_pin_watch_state(def_index)
+        self.assertIsNotNone(state)
+        self.assertEqual("S2", state.last_sale_listing_id if state else "")
+
+    def test_tracked_window_emits_new_price_change_and_removed(self) -> None:
+        def_index = 6110
+        market = "Pin Item"
+        l1 = make_listing(def_index, "L1", 5000, market_hash_name=market)
+        l2 = make_listing(def_index, "L2", 5100, market_hash_name=market)
+        l2_drop = make_listing(def_index, "L2", 5050, market_hash_name=market)
+        l3 = make_listing(def_index, "L3", 5200, market_hash_name=market)
+
+        client = FakeClient(
+            listings={
+                def_index: [
+                    [l1, l2],
+                    [l1, l2_drop],
+                    [l2_drop, l3],
+                ]
+            },
+            sales={market: [PinSaleRecord(sale_price=5400)]},
+        )
+        notifier = FakeNotifier()
+
+        bootstrap_pin_states(
+            storage=self.storage,
+            client=client,
+            def_indexes=[def_index],
+            sales_rows=10,
+            tracked_listings_limit=2,
+        )
+        stats_1 = run_pin_watch_poll(
+            storage=self.storage,
+            client=client,
+            notifier=notifier,
+            sales_rows=10,
+            tracked_listings_limit=2,
+        )
+        stats_2 = run_pin_watch_poll(
+            storage=self.storage,
+            client=client,
+            notifier=notifier,
+            sales_rows=10,
+            tracked_listings_limit=2,
+        )
+
+        self.assertEqual(1, stats_1.tracked_price_changed_events)
+        self.assertEqual(1, stats_2.tracked_new_events)
+        self.assertEqual(1, stats_2.tracked_removed_events)
+        self.assertIn((CHANGE_PRICE_CHANGED, "L2", def_index, 2, 2), notifier.tracked_changes)
+        self.assertIn((CHANGE_TRACKED_REMOVED, "L1", def_index, None, 1), notifier.tracked_changes)
+        self.assertIn((CHANGE_NEW, "L3", def_index, 2, None), notifier.tracked_changes)
 
 
 if __name__ == "__main__":

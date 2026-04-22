@@ -11,6 +11,7 @@ from csfloat_monitor.types import (
     CHANGE_DELISTED,
     CHANGE_NEW,
     CHANGE_PRICE_CHANGED,
+    CHANGE_TRACKED_REMOVED,
     ChangeSet,
     FieldDelta,
     PinSaleAlert,
@@ -81,6 +82,21 @@ class TelegramNotifierTests(unittest.TestCase):
         )
         message = format_change_message(change, price_formatter=DummyPriceFormatter())
         self.assertIn("🧪 <b>Float:</b>", message)
+
+    def test_tracked_removed_message_is_explicit(self) -> None:
+        change = ChangeSet(
+            listing_id="123",
+            change_type=CHANGE_TRACKED_REMOVED,
+            listing_url="https://csfloat.com/item/123",
+            market_hash_name="Item Name",
+            deltas=[
+                FieldDelta(field_name="state", old_value="listed", new_value="outside_top_window"),
+                FieldDelta(field_name="price", old_value="100", new_value="n/a"),
+            ],
+        )
+        message = format_change_message(change, price_formatter=DummyPriceFormatter())
+        self.assertIn("Left Tracked Window", message)
+        self.assertIn("Out of tracked cheapest window", message)
 
     def test_inline_button_only_for_new_and_price_change(self) -> None:
         base_kwargs = {

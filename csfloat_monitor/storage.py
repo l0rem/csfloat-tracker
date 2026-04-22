@@ -11,6 +11,7 @@ from csfloat_monitor.models import (
     ItemChange,
     PinCallbackAction,
     PinRecentSale,
+    PinTrackedListing,
     PinWatchState,
     PollRun,
     Setting,
@@ -307,6 +308,62 @@ class Storage:
         action.status = status
         action.updated_at = datetime.now(UTC)
         action.save()
+
+    def replace_pin_tracked_snapshot(self, def_index: int, listings: list[ListingRecord]) -> None:
+        now = datetime.now(UTC)
+        with self._db.atomic():
+            PinTrackedListing.delete().where(PinTrackedListing.def_index == def_index).execute()
+            for rank, listing in enumerate(listings, start=1):
+                PinTrackedListing.create(
+                    def_index=def_index,
+                    rank=rank,
+                    listing_id=listing.listing_id,
+                    listing_url=listing.listing_url,
+                    price=listing.price,
+                    state=listing.state,
+                    market_hash_name=listing.market_hash_name,
+                    item_name=listing.item_name,
+                    wear_name=listing.wear_name,
+                    float_value=listing.float_value,
+                    created_at=listing.created_at,
+                    screenshot_url=listing.screenshot_url,
+                    image_url=listing.image_url or listing.screenshot_url,
+                    inspect_link=listing.inspect_link,
+                    seller_description=listing.seller_description,
+                    raw_json=listing.raw_json,
+                    recorded_at=now,
+                )
+
+    def get_pin_tracked_snapshot_with_ranks(
+        self,
+        def_index: int,
+    ) -> tuple[dict[str, ListingRecord], dict[str, int]]:
+        rows = (
+            PinTrackedListing.select()
+            .where(PinTrackedListing.def_index == def_index)
+            .order_by(PinTrackedListing.rank.asc(), PinTrackedListing.id.asc())
+        )
+        snapshot: dict[str, ListingRecord] = {}
+        ranks: dict[str, int] = {}
+        for row in rows:
+            snapshot[row.listing_id] = ListingRecord(
+                listing_id=row.listing_id,
+                listing_url=row.listing_url,
+                price=row.price,
+                state=row.state,
+                market_hash_name=row.market_hash_name,
+                item_name=row.item_name,
+                wear_name=row.wear_name,
+                float_value=row.float_value,
+                created_at=row.created_at,
+                screenshot_url=row.screenshot_url,
+                image_url=row.image_url or row.screenshot_url,
+                inspect_link=row.inspect_link,
+                seller_description=row.seller_description,
+                raw_json=row.raw_json,
+            )
+            ranks[row.listing_id] = int(row.rank)
+        return snapshot, ranks
 
 
 def _infer_image_url_from_raw_json(raw_json: str | None) -> str | None:

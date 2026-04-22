@@ -4,6 +4,7 @@ Local Python monitor for CSFloat profile pins with:
 - Persistent per-pin pricing state across restarts
 - Startup bootstrap from live lowest listing + recent sales history
 - Telegram alerts when a newly fetched listing becomes cheaper than the previously cheapest active listing
+- Telegram alerts for tracked cheapest-window changes per watched pin (`new`, `price changed`, `left tracked window`)
 - Telegram alerts for newly detected latest sales on watched pins
 - Photo-first alerts (screenshot/icon) with last 10 sales in the message
 - Inline buy flow: `Buy` -> `Confirm? (Yes/No)` -> API purchase attempt
@@ -43,9 +44,11 @@ The script will:
 1. Auto-run unattended migrations.
 2. Bootstrap configured pins from live listings and sales history.
 3. Poll every 30 seconds (or `POLL_INTERVAL_SECONDS`) for lowest listing changes.
-4. Send Telegram alerts when a listing beats the previous poll's cheapest active listing, and when a new latest sale is detected.
-5. Handle inline callback actions to confirm/cancel purchases.
-6. Persist pin state, callback offsets, and callback action idempotency.
+4. Track the bottom `PIN_TRACKED_LISTINGS_LIMIT` listings per watched pin and send Telegram alerts for `new`, `price changed`, and `left tracked window` events.
+5. Send Telegram alerts when a listing beats the previous poll's cheapest active listing, and when a new latest sale is detected.
+   Sale alerts are suppressed if the sale timestamp is older than `SALE_ALERT_MAX_AGE_SECONDS` (default 3600s).
+6. Handle inline callback actions to confirm/cancel purchases.
+7. Persist pin state, callback offsets, and callback action idempotency.
 
 ## Tests
 
@@ -90,6 +93,8 @@ Use the provided `Dockerfile` and set these environment variables:
 - `POLL_INTERVAL_SECONDS`
 - `CSFLOAT_TARGET_DEF_INDEXES` (comma-separated pin def indexes)
 - `PIN_SALES_ROWS` (last N sales included in notifications)
+- `PIN_TRACKED_LISTINGS_LIMIT` (track and diff only the bottom N cheapest listings per watched def_index)
+- `SALE_ALERT_MAX_AGE_SECONDS` (skip stale/backfilled sale alerts; set `<0` to disable age filtering)
 - `TELEGRAM_UPDATES_POLL_SECONDS` (callback polling cadence)
 - `HTTP_TIMEOUT_SECONDS`
 - `HTTP_MAX_RETRIES`

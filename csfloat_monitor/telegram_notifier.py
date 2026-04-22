@@ -8,7 +8,14 @@ import httpx
 
 from csfloat_monitor.currency import PriceFormatter, UsdPriceFormatter
 from csfloat_monitor.market_insights import DelistedMarketAnalyzer
-from csfloat_monitor.types import CHANGE_NEW, CHANGE_PRICE_CHANGED, ChangeSet, PinAlert, PinSaleAlert
+from csfloat_monitor.types import (
+    CHANGE_NEW,
+    CHANGE_PRICE_CHANGED,
+    CHANGE_TRACKED_REMOVED,
+    ChangeSet,
+    PinAlert,
+    PinSaleAlert,
+)
 
 
 DEFAULT_PRICE_FORMATTER = UsdPriceFormatter()
@@ -17,6 +24,7 @@ EVENT_META: dict[str, tuple[str, str]] = {
     CHANGE_NEW: ("🆕", "New Listing"),
     CHANGE_PRICE_CHANGED: ("💸", "Price Updated"),
     "delisted": ("🛑", "Listing Delisted"),
+    CHANGE_TRACKED_REMOVED: ("📤", "Left Tracked Window"),
 }
 
 def _format_value(field_name: str, value: str | None, price_formatter: PriceFormatter) -> str:
@@ -68,6 +76,14 @@ def format_change_message(change: ChangeSet, price_formatter: PriceFormatter = D
         if old_price:
             lines.append(f"💶 <b>Last Price:</b> <code>{html.escape(_format_value('price', old_price, price_formatter))}</code>")
         lines.append("📦 <b>Status:</b> <code>Delisted</code>")
+        return "\n".join(lines)
+
+    if change.change_type == CHANGE_TRACKED_REMOVED:
+        old_price = _find_delta_value(change, "price", use_new=False)
+        if old_price:
+            lines.append(f"💶 <b>Last Seen Price:</b> <code>{html.escape(_format_value('price', old_price, price_formatter))}</code>")
+        lines.append("📦 <b>Status:</b> <code>Out of tracked cheapest window</code>")
+        lines.append("ℹ️ <i>Could be sold, delisted, or pushed above the tracked cheapest range.</i>")
         return "\n".join(lines)
 
     # Fallback generic format for any future change types.
@@ -188,19 +204,48 @@ class TelegramNotifier:
         self._price_formatter.close()
 
     def send_change(self, change: ChangeSet) -> None:
+        self._send_change_with_context(change, context_lines=[])
+
+    def send_pin_listing_change(
+        self,
+        change: ChangeSet,
+        *,
+        def_index: int,
+        tracked_limit: int,
+        current_rank: int | None = None,
+        previous_rank: int | None = None,
+    ) -> None:
+        rank_line = ""
+        if current_rank is not None and previous_rank is not None and current_rank != previous_rank:
+            rank_line = f"🔢 <b>Rank:</b> <code>#{previous_rank}</code> → <code>#{current_rank}</code> of <code>{tracked_limit}</code>"
+        elif current_rank is not None:
+            rank_line = f"🔢 <b>Rank:</b> <code>#{current_rank}</code> of <code>{tracked_limit}</code>"
+        elif previous_rank is not None:
+            rank_line = f"🔢 <b>Last Tracked Rank:</b> <code>#{previous_rank}</code> of <code>{tracked_limit}</code>"
+
+        context_lines = [f"🧩 <b>Def Index:</b> <code>{def_index}</code>"]
+        if rank_line:
+            context_lines.append(rank_line)
+        self._send_change_with_context(change, context_lines=context_lines)
+
+    def _send_change_with_context(self, change: ChangeSet, *, context_lines: list[str]) -> None:
         market_line = None
         if self._market_analyzer:
             try:
                 market_line = self._market_analyzer.build_market_line(change, self._price_formatter)
             except Exception as exc:  # noqa: BLE001
                 self._log.warning("market_analyzer_failed listing_id=%s error=%s", change.listing_id, exc)
+        line_blocks = [line for line in context_lines if line]
+        if market_line:
+            line_blocks.append(market_line)
+        final_market_line = "\n".join(line_blocks) if line_blocks else None
 
         if change.image_url or change.screenshot_url:
             photo_payload = build_send_photo_payload(
                 self._chat_id,
                 change,
                 price_formatter=self._price_formatter,
-                market_line=market_line,
+                market_line=final_market_line,
             )
             try:
                 response = self._client.post(self._send_photo_url, json=photo_payload)
@@ -223,7 +268,7 @@ class TelegramNotifier:
             self._chat_id,
             change,
             price_formatter=self._price_formatter,
-            market_line=market_line,
+            market_line=final_market_line,
         )
         response = self._client.post(self._send_message_url, json=payload)
         response.raise_for_status()
