@@ -80,6 +80,47 @@ class CSFloatClient:
 
         return records
 
+    def fetch_all_listings_for_def_indexes(
+        self,
+        def_indexes: list[int],
+        *,
+        page_limit: int = 40,
+    ) -> dict[str, ListingRecord]:
+        records: dict[str, ListingRecord] = {}
+        normalized_def_indexes = [int(v) for v in def_indexes if str(v).strip()]
+        if not normalized_def_indexes:
+            return self.fetch_all_listings()
+
+        is_first_page = True
+        for def_index in normalized_def_indexes:
+            cursor: str | None = None
+            page_number = 1
+            while True:
+                if not is_first_page and self._page_delay_seconds > 0:
+                    time.sleep(self._page_delay_seconds)
+                payload = self._request_def_index_page(def_index, cursor=cursor, limit=page_limit)
+                page_data = payload.get("data", [])
+                self._log.info(
+                    "fetch_page_success def_index=%d page=%d cursor=%s items=%d has_next=%s",
+                    def_index,
+                    page_number,
+                    bool(cursor),
+                    len(page_data),
+                    bool(payload.get("cursor")),
+                )
+                for listing_payload in page_data:
+                    record = self._normalize_listing(listing_payload)
+                    records[record.listing_id] = record
+
+                cursor = payload.get("cursor")
+                if not cursor:
+                    break
+                is_first_page = False
+                page_number += 1
+            is_first_page = False
+
+        return records
+
     def fetch_lowest_listing(self, def_index: int) -> ListingRecord | None:
         self._log.info("fetch_lowest_listing_start def_index=%s", def_index)
         listings = self.fetch_cheapest_listings(def_index, limit=1)
@@ -98,7 +139,7 @@ class CSFloatClient:
 
     def fetch_cheapest_listings(self, def_index: int, *, limit: int) -> list[ListingRecord]:
         normalized_limit = max(1, int(limit))
-        url = self._build_listings_url_for_def_index(def_index, limit=normalized_limit)
+        url = self._build_target_listings_url_for_def_index(def_index, limit=normalized_limit)
         self._log.info(
             "fetch_cheapest_listings_start def_index=%s limit=%s",
             def_index,
@@ -163,6 +204,26 @@ class CSFloatClient:
     def _request_page(self, cursor: str | None) -> dict[str, Any]:
         url = self._with_cursor(self._listings_url, cursor)
         return self._request_json(url)
+
+    def _request_def_index_page(self, def_index: int, *, cursor: str | None, limit: int) -> dict[str, Any]:
+        url = self._with_cursor(
+            self._build_target_listings_url_for_def_index(def_index, limit=limit),
+            cursor,
+        )
+        return self._request_json(url)
+
+    def _build_target_listings_url_for_def_index(self, def_index: int, *, limit: int) -> str:
+        split = urlsplit(self._listings_url)
+        params = dict(parse_qsl(split.query, keep_blank_values=True))
+        params.pop("cursor", None)
+        params.pop("paint_index", None)
+        params["def_index"] = str(int(def_index))
+        params["limit"] = str(max(1, int(limit)))
+
+        scheme = split.scheme or "https"
+        netloc = split.netloc or "csfloat.com"
+        path = split.path or "/api/v1/listings"
+        return urlunsplit((scheme, netloc, path, urlencode(params), split.fragment))
 
     def _request_json(
         self,
@@ -230,13 +291,6 @@ class CSFloatClient:
         raise RuntimeError(
             f"Failed to fetch CSFloat listings after {self._max_retries} attempts "
             f"(429 retries used: {retry_429_used}/{self._max_429_retries}): {last_exc}"
-        )
-
-    @staticmethod
-    def _build_listings_url_for_def_index(def_index: int, *, limit: int = 1) -> str:
-        return (
-            "https://csfloat.com/api/v1/listings"
-            f"?limit={max(1, int(limit))}&sort_by=lowest_price&def_index={int(def_index)}"
         )
 
     def _compute_retry_delay(self, attempt: int, response: httpx.Response | None) -> float:

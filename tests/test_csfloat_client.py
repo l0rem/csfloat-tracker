@@ -58,6 +58,44 @@ class CSFloatClientTests(unittest.TestCase):
         self.assertEqual("double wave thumb", records["2"].seller_description)
         client.close()
 
+    def test_fetch_all_listings_for_def_indexes_combines_pages(self) -> None:
+        client = CSFloatClient(
+            api_key="test",
+            listings_url="https://csfloat.com/api/v1/listings?limit=40",
+            item_url_template="https://csfloat.com/item/{listing_id}",
+            screenshot_url_template="https://csfloat.pics/m/{screenshot_id}/playside.png?v=3",
+        )
+
+        with patch.object(
+            client,
+            "_request_def_index_page",
+            side_effect=[
+                {
+                    "data": [{"id": "a1", "price": 100, "state": "listed", "item": {"market_hash_name": "Alyx Pin"}}],
+                    "cursor": "next-a",
+                },
+                {
+                    "data": [{"id": "a2", "price": 110, "state": "listed", "item": {"market_hash_name": "Alyx Pin"}}],
+                },
+                {
+                    "data": [{"id": "v1", "price": 120, "state": "listed", "item": {"market_hash_name": "Valeria Pin"}}],
+                },
+            ],
+        ) as mocked_page:
+            records = client.fetch_all_listings_for_def_indexes([6134, 6121], page_limit=2)
+
+        self.assertEqual(3, len(records))
+        self.assertEqual(["a1", "a2", "v1"], sorted(records.keys()))
+        self.assertEqual(
+            [
+                (6134, {"cursor": None, "limit": 2}),
+                (6134, {"cursor": "next-a", "limit": 2}),
+                (6121, {"cursor": None, "limit": 2}),
+            ],
+            [(call.args[0], call.kwargs) for call in mocked_page.call_args_list],
+        )
+        client.close()
+
     def test_retries_429_and_recovers(self) -> None:
         calls = {"count": 0}
 

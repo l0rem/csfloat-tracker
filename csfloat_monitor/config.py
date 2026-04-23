@@ -11,7 +11,8 @@ from csfloat_monitor.proxy import normalize_proxy_url, redact_proxy_url
 DEFAULT_LISTINGS_URL = "https://csfloat.com/api/v1/listings?limit=40&max_price=46364&paint_index=1437"
 DEFAULT_ITEM_URL_TEMPLATE = "https://csfloat.com/item/{listing_id}"
 DEFAULT_SCREENSHOT_URL_TEMPLATE = "https://csfloat.pics/m/{screenshot_id}/playside.png?v=3"
-DEFAULT_PIN_DEF_INDEXES = [4682, 6134, 6101, 6102, 6132, 6121]
+# Alyx + Valeria (pin watch targets)
+DEFAULT_PIN_DEF_INDEXES = [6134, 6121]
 
 
 @dataclass(slots=True)
@@ -37,10 +38,6 @@ class AppConfig:
     market_avg_min_samples: int
     log_level: str
     pin_target_def_indexes: list[int]
-    pin_sales_rows: int
-    pin_tracked_listings_limit: int
-    telegram_updates_poll_seconds: float
-    sale_alert_max_age_seconds: int | None
 
     @classmethod
     def from_env(cls) -> "AppConfig":
@@ -112,23 +109,6 @@ class AppConfig:
         if not pin_target_def_indexes:
             raise ValueError("CSFLOAT_TARGET_DEF_INDEXES must include at least one def_index")
 
-        pin_sales_rows = int(os.getenv("PIN_SALES_ROWS", "10"))
-        if pin_sales_rows < 1:
-            raise ValueError("PIN_SALES_ROWS must be >= 1")
-
-        pin_tracked_listings_limit = int(os.getenv("PIN_TRACKED_LISTINGS_LIMIT", "5"))
-        if pin_tracked_listings_limit < 1:
-            raise ValueError("PIN_TRACKED_LISTINGS_LIMIT must be >= 1")
-
-        telegram_updates_poll_seconds = float(os.getenv("TELEGRAM_UPDATES_POLL_SECONDS", "1.5"))
-        if telegram_updates_poll_seconds < 0:
-            raise ValueError("TELEGRAM_UPDATES_POLL_SECONDS must be >= 0")
-
-        sale_alert_max_age_raw = os.getenv("SALE_ALERT_MAX_AGE_SECONDS", "3600").strip()
-        sale_alert_max_age_seconds = int(sale_alert_max_age_raw)
-        if sale_alert_max_age_seconds < 0:
-            sale_alert_max_age_seconds = None
-
         csfloat_proxy = normalize_proxy_url(os.getenv("CSFLOAT_PROXY", "").strip())
 
         return cls(
@@ -159,10 +139,6 @@ class AppConfig:
             market_avg_min_samples=market_avg_min_samples,
             log_level=log_level,
             pin_target_def_indexes=pin_target_def_indexes,
-            pin_sales_rows=pin_sales_rows,
-            pin_tracked_listings_limit=pin_tracked_listings_limit,
-            telegram_updates_poll_seconds=telegram_updates_poll_seconds,
-            sale_alert_max_age_seconds=sale_alert_max_age_seconds,
         )
 
     def redacted_database_target(self) -> str:

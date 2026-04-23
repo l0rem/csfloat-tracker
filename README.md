@@ -1,14 +1,11 @@
 # CSFloat Listing Monitor
 
-Local Python monitor for CSFloat profile pins with:
-- Persistent per-pin pricing state across restarts
-- Startup bootstrap from live lowest listing + recent sales history
-- Telegram alerts when a newly fetched listing becomes cheaper than the previously cheapest active listing
-- Telegram alerts for tracked cheapest-window changes per watched pin (`new`, `price changed`, `left tracked window`)
-- Telegram alerts for newly detected latest sales on watched pins
-- Photo-first alerts (screenshot/icon) with last 10 sales in the message
-- Inline buy flow: `Buy` -> `Confirm? (Yes/No)` -> API purchase attempt
-- Automatic pin completion (stop watching) after successful purchase
+Local Python monitor for CSFloat listings with:
+- Telegram notifications for new listings, price changes, and delists
+- Targeted def-index tracking (defaults: Alyx + Valeria pins)
+- Photo-first Telegram alerts (in-game screenshot when available, icon fallback)
+- New listing alerts include inspect link and seller note when available
+- `% vs sold average` enrichment based on historical delisted prices
 - Auto schema migrations on startup via `peewee-db-evolve`
 
 ## Requirements
@@ -42,13 +39,10 @@ uv run python monitor.py run
 
 The script will:
 1. Auto-run unattended migrations.
-2. Bootstrap configured pins from live listings and sales history.
-3. Poll every 30 seconds (or `POLL_INTERVAL_SECONDS`) for lowest listing changes.
-4. Track the bottom `PIN_TRACKED_LISTINGS_LIMIT` listings per watched pin and send Telegram alerts for `new`, `price changed`, and `left tracked window` events.
-5. Send Telegram alerts when a listing beats the previous poll's cheapest active listing, and when a new latest sale is detected.
-   Sale alerts are suppressed if the sale timestamp is older than `SALE_ALERT_MAX_AGE_SECONDS` (default 3600s).
-6. Handle inline callback actions to confirm/cancel purchases.
-7. Persist pin state, callback offsets, and callback action idempotency.
+2. Execute startup diff against existing DB snapshot (no spam on first run when snapshot is empty).
+3. Poll every 30 seconds (or `POLL_INTERVAL_SECONDS`) for tracked def indexes.
+4. Persist append-only row-level change history in `item_changes`.
+5. Send immediate Telegram messages for `new`, `price changed`, and `delisted` events.
 
 ## Tests
 
@@ -61,7 +55,6 @@ uv run python -m unittest discover -s tests -p "test_*.py"
 - Rotate exposed credentials and keep `.env` local.
 - Listing URL defaults to `https://csfloat.com/item/{listing_id}`.
 - Screenshot URL defaults to `https://csfloat.pics/m/{screenshot_id}/playside.png?v=3`.
-- Buy endpoint used for confirmations: `POST /api/v1/listings/buy`.
 - Supabase/Postgres is configured through `DATABASE_URL`.
 - Use the exact Postgres URI from Supabase Dashboard (`Connect`), because host/user formats vary by region/pooler.
 - `SQLITE_PATH` still works as an optional local fallback for dev/testing.
@@ -91,11 +84,7 @@ Use the provided `Dockerfile` and set these environment variables:
 - `DATABASE_URL` (Supabase, include `?sslmode=require`)
 - `LOG_LEVEL` (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`)
 - `POLL_INTERVAL_SECONDS`
-- `CSFLOAT_TARGET_DEF_INDEXES` (comma-separated pin def indexes)
-- `PIN_SALES_ROWS` (last N sales included in notifications)
-- `PIN_TRACKED_LISTINGS_LIMIT` (track and diff only the bottom N cheapest listings per watched def_index)
-- `SALE_ALERT_MAX_AGE_SECONDS` (skip stale/backfilled sale alerts; set `<0` to disable age filtering)
-- `TELEGRAM_UPDATES_POLL_SECONDS` (callback polling cadence)
+- `CSFLOAT_TARGET_DEF_INDEXES` (comma-separated def indexes; defaults to Alyx + Valeria pins)
 - `HTTP_TIMEOUT_SECONDS`
 - `HTTP_MAX_RETRIES`
 - `HTTP_429_RETRIES`
